@@ -1,0 +1,6 @@
+__pycache__/
+tmp/
+tmp*
+temp*
+json.json
+*.db
