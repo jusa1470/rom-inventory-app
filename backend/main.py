@@ -55,8 +55,8 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 def _check_credentials():
     store = CredentialStore()
     if store.is_first_run():
-        logger.info("First run — launching setup wizard")
-        store.setup_wizard()
+        logger.critical("Credentials not configured. Run setup.py first.")
+        sys.exit(1)
 
 
 @asynccontextmanager

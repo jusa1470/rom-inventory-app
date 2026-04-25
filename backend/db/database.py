@@ -289,6 +289,7 @@ from db.models import (
     SyncState,
     WebamiOrder,
     WebamiProduct,
+    WebamiOrderItem
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -424,6 +425,39 @@ def search_webami_products_with_cost() -> list[dict]:
 def get_all_upcs() -> set[str]:
     with get_db() as db:
         return {r.upc for r in db.query(WebamiProduct.upc).all()}
+    
+
+def upsert_order_items(guid: str, upcs: list[str]) -> None:
+    with get_db() as db:
+        existing = {
+            r.upc: r for r in
+            db.query(WebamiOrderItem)
+            .filter(WebamiOrderItem.order_guid == guid)
+            .all()
+        }
+        # Count occurrences — same UPC can appear multiple times in an order
+        upc_counts: dict[str, int] = {}
+        for upc in upcs:
+            upc_counts[upc] = upc_counts.get(upc, 0) + 1
+
+        for upc, qty in upc_counts.items():
+            if upc in existing:
+                existing[upc].quantity_ordered = qty  # update if re-synced
+            else:
+                db.add(WebamiOrderItem(
+                    order_guid=guid,
+                    upc=upc,
+                    quantity_ordered=qty,
+                    quantity_received=0,
+                ))
+
+def mark_item_received(item_id: int, quantity_received: int) -> None:
+    with get_db() as db:
+        item = db.get(WebamiOrderItem, item_id)
+        if not item:
+            return
+        item.quantity_received = max(0, min(quantity_received, item.quantity_ordered))
+        item.received_at = datetime.now(timezone.utc) if item.quantity_received > 0 else None
 
 
 # ─────────────────────────────────────────────

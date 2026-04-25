@@ -107,6 +107,17 @@ class WebamiOrder(Base):
     raw_upcs: Mapped[str] = mapped_column(Text)  # JSON string
 
 
+class WebamiOrderItem(Base):
+    __tablename__ = "webami_order_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_guid: Mapped[str] = mapped_column(String, index=True)
+    upc: Mapped[str] = mapped_column(String, index=True)
+    quantity_ordered: Mapped[int] = mapped_column(Integer, default=1)
+    quantity_received: Mapped[int] = mapped_column(Integer, default=0)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class WebamiProduct(Base):
     __tablename__ = "webami_products"
 

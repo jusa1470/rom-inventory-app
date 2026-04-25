@@ -36,7 +36,7 @@ _KEYS = {
     "webami_password",
     "shopify_token",
     "test_shopify_token",
-    "app_password_hash",  # we store a hash, never the raw password
+    "app_password_hash",
 }
 
 
@@ -108,28 +108,6 @@ class CredentialStore:
     def is_first_run(self) -> bool:
         """True if no credentials have been configured yet."""
         return keyring.get_password(self.service, "app_password_hash") is None
-
-    def setup_wizard(self) -> None:
-        """
-        Interactive CLI wizard for first-run credential setup.
-        Replace with GUI prompts when the frontend is added.
-        """
-        import getpass
-
-        print(f"\n=== {APP_NAME} First-Run Setup ===\n")
-
-        pw = getpass.getpass("Create app master password: ")
-        pw2 = getpass.getpass("Confirm app master password: ")
-        if pw != pw2:
-            raise CredentialError("Passwords do not match.")
-        self.set_app_password(pw)
-
-        self.set("webami_username", input("Webami email: ").strip())
-        self.set("webami_password", getpass.getpass("Webami password: "))
-        self.set("shopify_token", getpass.getpass("Shopify Admin API token: "))
-        self.set("test_shopify_token", getpass.getpass("Test Shopify Admin API token: "))
-
-        print("\n✅  Credentials saved to OS keychain.\n")
 
     def reset_all(self) -> None:
         """Wipe all stored credentials. User will need to re-run setup."""

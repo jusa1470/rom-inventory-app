@@ -5,7 +5,6 @@ triggers the appropriate sync strategy for both Webami and Shopify.
 """
 
 import logging
-from typing import Optional
 
 import db.database as db
 from tmp.shopify_sync import ShopifySyncOrchestrator
@@ -16,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 _webami = WebamiSyncOrchestrator()
 _shopify = ShopifySyncOrchestrator()
-_price_bridge = PriceBridge()
-_gap_filler = GapFiller()
 
 
 def run_startup_sync() -> dict:

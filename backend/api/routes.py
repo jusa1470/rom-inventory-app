@@ -13,8 +13,7 @@ from credentials import CredentialStore, CredentialError
 
 from shopify.shopify_service import ShopifySyncService
 from webami.webami_service import WebamiSyncService
-from sync.services.pricing import PriceSyncService
-from sync.services.gap_fill import GapFillService
+from sync.bridge import BridgeService
 
 from shopify.client import ShopifyClient
 
@@ -27,8 +26,7 @@ _creds = CredentialStore()
 
 _webami = WebamiSyncService()
 _shopify = ShopifySyncService()
-_price_sync = PriceSyncService()
-_gap_fill = GapFillService()
+_bridge = BridgeService()
 
 _shopify_client = ShopifyClient()
 
@@ -107,9 +105,11 @@ async def webami_orders_incremental():
 async def webami_products_full():
     return await run_in_threadpool(_webami.run_products_full)
 
-@router.post("/sync/webami/prices")
-async def webami_prices(body: PriceSyncRequest):
-    return await run_in_threadpool(_price_sync.run_full)
+@router.patch("/webami/orders/{guid}/items/{item_id}")
+async def update_order_item(guid: str, item_id: int, body: dict):
+    qty = body.get("quantity_received", 0)
+    db.mark_item_received(item_id, qty)
+    return {"ok": True}
 
 
 # ── SHOPIFY SYNC ────────────────────────────────────────────────────
@@ -127,12 +127,12 @@ async def shopify_incremental():
 
 @router.post("/sync/prices")
 async def sync_prices():
-    return await run_in_threadpool(_price_sync.run_full)
-
+    return await run_in_threadpool(_bridge.push_prices)
 
 @router.post("/sync/gap-fill")
 async def gap_fill(body: GapFillRequest):
-    return await run_in_threadpool(_gap_fill.run_full)
+    ids = body.product_ids or None
+    return await run_in_threadpool(lambda: _bridge.fill_gaps(ids))
 
 
 # ── CRUD (unchanged but CLEANED) ────────────────────────────────────
