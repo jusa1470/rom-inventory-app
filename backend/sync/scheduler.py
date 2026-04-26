@@ -7,7 +7,7 @@ import config
 import sync.cancel as cancel
 import db.database as db
 from sync.bridge import BridgeService
-from webami.webami_sync import WebamiSyncService
+from backend.webami.webami_service import WebamiSyncService
 from shopify.shopify_service import ShopifySyncService
 
 logger = logging.getLogger(__name__)

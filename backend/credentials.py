@@ -25,8 +25,8 @@ Usage:
 """
 
 import hashlib
-import os
 import keyring
+from keyring.errors import PasswordDeleteError
 from config import APP_NAME
 
 
@@ -73,7 +73,7 @@ class CredentialStore:
         """Remove a credential from the keychain."""
         try:
             keyring.delete_password(self.service, key)
-        except keyring.errors.PasswordDeleteError:
+        except PasswordDeleteError:
             pass
 
     def is_set(self, key: str) -> bool:

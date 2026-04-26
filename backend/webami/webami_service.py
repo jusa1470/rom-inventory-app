@@ -1,279 +1,241 @@
-# import logging
-# from datetime import datetime, timezone
-
-# import db.database as db
-# import sync.cancel as cancel
-# from sync.base import SyncJob
-
-# from webami import orders as order_fetcher
-# from webami import scraper
-# from db.models import WebamiProduct
-
-# logger = logging.getLogger(__name__)
-
-
-# class WebamiSyncService(SyncJob):
-#     job_name = "Webami"
-
-#     def _execute(self, mode: str) -> dict:
-#         if mode == "full":
-#             return self._sync_all()
-#         else:
-#             return self._sync_incremental()
-
-#     def _sync_all(self) -> dict:
-#         orders = order_fetcher.get_all_orders()
-#         return self._process_orders(orders)
-
-#     def _sync_incremental(self) -> dict:
-#         known = db.get_all_order_guids()
-#         recent = order_fetcher.get_recent_orders()
-#         new_orders = [o for o in recent if o.guid not in known]
-#         return self._process_orders(new_orders)
-
-#     def _process_orders(self, orders):
-#         new_upcs = set()
-#         completed = 0
-
-#         for order in orders:
-#             if cancel.cancelled():
-#                 break
-
-#             guid, upcs = order_fetcher.parse_order_page_worker(order.guid)
-
-#             order.raw_upcs = upcs
-#             order.number_of_products = len(upcs)
-
-#             db.upsert_order(order)
-
-#             for upc in upcs:
-#                 new_upcs.add(upc)
-
-#             completed += 1
-
-#         scraped = self._scrape_products(new_upcs)
-
-#         return {
-#             "orders_processed": completed,
-#             "products_scraped": scraped,
-#         }
-
-#     def _scrape_products(self, upcs):
-#         count = 0
-
-#         for upc in upcs:
-#             if cancel.cancelled():
-#                 break
-
-#             data = scraper.scrape_product_page(upc)
-
-#             if data:
-#                 db.upsert_webami_product(
-#                     WebamiProduct(
-#                         upc=data["upc"],
-#                         album=data.get("album"),
-#                         artist=data.get("artist"),
-#                         image_urls=data.get("image_urls"),
-#                         features=data.get("features"),
-#                         weight_grams=data.get("weight_grams"),
-#                         cost=data.get("cost"),
-#                         format=data.get("format"),
-#                     )
-#                 )
-#                 count += 1
-
-#         return count
-
-#     def _update_state(self, mode: str) -> None:
-#         db.set_sync_state(
-#             "webami_orders",
-#             datetime.now(timezone.utc),
-#         )
-
-
 """
-Webami sync service.
-
-Responsibilities:
-- Fetch orders (full / incremental)
-- Scrape missing products
-- Refresh prices
-
-Uses DTOs at boundaries, ORM only at DB layer.
+Webami sync orchestrator.
+Every public method wraps its work in try/finally so cancel.clear_running()
+and cancel.set_result() are always called, even if an exception is raised.
+This ensures /sync/running always returns an accurate state.
 """
 
 import logging
-from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional
+from datetime import datetime, timezone
 
+import config
 import db.database as db
-from db.models import WebamiProduct, WebamiOrder
-from webami.scraper import scrape_product_page, get_cost
-from webami.orders import fetch_orders  # assume this returns WebamiOrderDTOs
 import sync.cancel as cancel
+from db.models import WebamiProduct, WebamiOrder
+from webami import orders as order_fetcher
+from webami import scraper
 
 logger = logging.getLogger(__name__)
 
-MAX_WORKERS = 6  # tune based on Webami limits
 
+class WebamiSyncService :
 
-class WebamiSyncService:
-    # ── ORDERS ─────────────────────────────────────────
+    # ── Orders ───────────────────────────────────────────────────────
 
-    def run_full(self) -> dict:
-        cancel.set_running("Webami full sync")
+    def sync_orders_full(self) -> tuple[list[WebamiOrder], dict]:
+        cancel.reset()
+        cancel.set_running("Webami orders — full")
+        logger.info("Webami: full order sync starting")
         try:
-            orders = fetch_orders()  # full fetch
-            return self._process_orders(orders, full=True)
+            all_orders = order_fetcher.get_all_orders()
+            result = self._process_guids(all_orders)
+            cancel.set_result(
+                "cancelled" if result["cancelled"] else "completed",
+                "Webami orders — full", counts=result,
+            )
+            return (all_orders, result)
         except Exception as e:
-            cancel.set_result("failed", "Webami full sync", detail=str(e))
-            logger.exception("Webami full sync failed")
+            cancel.set_result("failed", "Webami orders — full", detail=str(e))
+            logger.error(f"Webami orders full sync failed: {e}")
             raise
         finally:
             cancel.clear_running()
 
-    def run_incremental(self) -> dict:
-        cancel.set_running("Webami incremental sync")
+    def sync_orders_incremental(self) -> dict:
+        cancel.reset()
+        cancel.set_running("Webami orders — incremental")
+        logger.info("Webami: incremental order sync starting")
         try:
-            state = db.get_sync_state("webami_orders")
-            since = state["last_sync"] if state else None
-
-            orders = fetch_orders(since=since)
-            return self._process_orders(orders, full=False)
+            known = db.get_all_order_guids()
+            recent_orders = order_fetcher.get_recent_orders()
+            new_orders = [o for o in recent_orders if o.guid not in known]
+            logger.info(f"Webami: {len(new_orders)} new order(s) found")
+            result = self._process_guids(new_orders)
+            cancel.set_result(
+                "cancelled" if result["cancelled"] else "completed",
+                "Webami orders — incremental", counts=result,
+            )
+            return result
         except Exception as e:
-            cancel.set_result("failed", "Webami incremental sync", detail=str(e))
-            logger.exception("Webami incremental sync failed")
+            cancel.set_result("failed", "Webami orders — incremental", detail=str(e))
+            logger.error(f"Webami orders incremental sync failed: {e}")
             raise
         finally:
             cancel.clear_running()
 
-    def _process_orders(self, orders: List[dict], full: bool) -> dict:
-        existing = db.get_all_order_guids()
-        new_orders = 0
-        upcs_to_scrape = set()
+    def _process_guids(self, orders: list[WebamiOrder]) -> dict:
+        """
+        Fetch and parse order pages in parallel, then scrape any new UPCs.
+        Uses a lock to safely accumulate results from concurrent threads.
+        """
+        if not orders:
+            return {
+                "orders_processed": 0,
+                "orders_total": 0,
+                "products_scraped": 0,
+                "cancelled": cancel.cancelled(),
+            }
+        
+        known_upcs = db.get_all_upcs()
+        new_upcs: set[str] = set()
 
-        for o in orders:
-            if cancel.cancelled():
-                break
-
-            if o["guid"] not in existing:
-                new_orders += 1
-                upcs_to_scrape.update(o["raw_upcs"])
-
-            db.upsert_order(WebamiOrder(
-                guid=o["guid"],
-                order_number=o.get("order_number"),
-                order_name=o.get("order_name"),
-                order_date=o.get("order_date"),
-                number_of_products=len(o["raw_upcs"]),
-                raw_upcs=o["raw_upcs"],
-            ))
-
-        scraped = self._scrape_products(list(upcs_to_scrape))
-
-        db.set_sync_state(
-            "webami_orders",
-            datetime.now(timezone.utc)
+        logger.info(
+            f"Webami: fetching {len(orders)} order page(s) "
+            f"with {config.WEBAMI_ORDER_WORKERS} worker(s)"
         )
 
-        result = {
-            "orders_processed": len(orders),
-            "new_orders": new_orders,
+        completed = 0
+        total = len(orders)
+
+        with ThreadPoolExecutor(
+            max_workers=config.WEBAMI_ORDER_WORKERS,
+            thread_name_prefix="WebamiOrders",
+        ) as pool:
+            futures = {
+                pool.submit(order_fetcher.parse_order_page_worker, order.guid): order
+                for order in orders
+            }
+            for future in as_completed(futures):
+                if cancel.cancelled():
+                    for f in futures:
+                        f.cancel()
+                    logger.info("Webami orders: cancelled — draining pool")
+                    break
+                order = futures[future]
+                try:
+                    guid, upcs = future.result()
+                    order.raw_upcs = upcs
+                    order.number_of_products = len(upcs)
+                    db.upsert_order(order)
+                    completed += 1
+                    for upc in upcs:
+                        if upc not in known_upcs:
+                            new_upcs.add(upc)
+                    logger.info(f"Order {guid}: done ({completed}/{total})")
+                except Exception as e:
+                    logger.error(f"Order {order.guid}: failed — {e}")
+
+        logger.info(f"Webami: {len(new_upcs)} new product UPC(s) to scrape")
+        scraped = self._scrape_products_parallel(new_upcs)
+
+        if not cancel.cancelled():
+            db.set_sync_state("webami_orders", datetime.now(timezone.utc))
+
+        return {
+            "orders_processed": completed,
+            "orders_total": len(orders),
             "products_scraped": scraped,
+            "cancelled": cancel.cancelled(),
         }
 
-        cancel.set_result("completed", "Webami orders", counts=result)
-        return result
+    # ── Products ─────────────────────────────────────────────────────
 
-    # ── PRODUCTS ───────────────────────────────────────
+    def sync_products_full(self) -> dict:
+        cancel.reset()
+        cancel.set_running("Webami products — full")
+        logger.info("Webami: full product sync starting")
+        try:
+            all_upcs = db.get_all_upcs()
+            scraped = self._scrape_products_parallel(all_upcs)
+            if not cancel.cancelled():
+                db.set_sync_state("webami_products", datetime.now(timezone.utc))
+            result = {
+                "products_scraped": scraped,
+                "products_total": len(all_upcs),
+                "cancelled": cancel.cancelled(),
+            }
+            cancel.set_result(
+                "cancelled" if result["cancelled"] else "completed",
+                "Webami products — full", counts=result,
+            )
+            return result
+        except Exception as e:
+            cancel.set_result("failed", "Webami products — full", detail=str(e))
+            logger.error(f"Webami products full sync failed: {e}")
+            raise
+        finally:
+            cancel.clear_running()
 
-    def _scrape_products(self, upcs: List[str]) -> int:
+    def _scrape_products_parallel(self, upcs: set[str]) -> int:
         if not upcs:
             return 0
 
-        existing = db.get_all_upcs()
-        targets = [u for u in upcs if u not in existing]
+        completed = 0
+        total = len(upcs)
+        logger.info(
+            f"Webami: starting product scrape pool — "
+            f"{config.WEBAMI_SCRAPE_WORKERS} workers, {total} UPCs"
+        )
 
-        if not targets:
-            return 0
-
-        logger.info(f"Scraping {len(targets)} new products")
-
-        count = 0
-
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {
-                executor.submit(scrape_product_page, upc): upc
-                for upc in targets
-            }
-
+        with ThreadPoolExecutor(
+            max_workers=config.WEBAMI_SCRAPE_WORKERS,
+            thread_name_prefix="WebamiScraper",
+        ) as pool:
+            futures = {pool.submit(scraper.scrape_product_page, upc): upc for upc in upcs}
             for future in as_completed(futures):
                 if cancel.cancelled():
+                    for f in futures:
+                        f.cancel()
                     break
-
                 upc = futures[future]
-
                 try:
-                    dto = future.result()
-                    if not dto:
-                        continue
+                    data = future.result()
+                    if data:
+                        product = WebamiProduct(
+                            upc=data["upc"],
+                            album=data.get("album"),
+                            artist=data.get("artist"),
+                            image_urls=data.get("image_urls"),
+                            features=data.get("features"),
+                            weight_grams=data.get("weight_grams"),
+                            cost=data.get("cost"),
+                            format=data.get("format"),
+                        )
+                        db.upsert_webami_product(product)
+                        completed += 1
+                        logger.info(f"UPC {upc}: done ({completed}/{total})")
+                except Exception as e:
+                    logger.error(f"UPC {upc}: scrape failed — {e}")
 
-                    db.upsert_webami_product(WebamiProduct(
-                        upc=dto["upc"],
-                        album=dto["album"],
-                        artist=dto["artist"],
-                        image_urls=dto["image_urls"],
-                        features=dto["features"],
-                        weight_grams=dto["weight_grams"],
-                        cost=dto["cost"],
-                        format=dto["format"],
-                    ))
+        logger.info(f"Webami: scraped {completed}/{len(upcs)} products")
+        return completed
 
-                    count += 1
+    # ── Prices ───────────────────────────────────────────────────────
 
-                except Exception:
-                    logger.exception(f"Failed scraping UPC {upc}")
-
-        return count
-
-    # ── PRICES ─────────────────────────────────────────
-
-    def run_prices(self, upcs: Optional[List[str]] = None) -> dict:
-        cancel.set_running("Webami price sync")
+    def sync_prices(self, upcs: list[str] | None = None) -> dict:
+        cancel.reset()
+        cancel.set_running("Webami prices")
+        targets = list(upcs or db.get_all_upcs())
+        logger.info(f"Webami: syncing prices for {len(targets)} product(s)")
         try:
-            if upcs:
-                targets = upcs
-            else:
-                targets = list(db.get_all_upcs())
-
             updated = 0
-
             for upc in targets:
                 if cancel.cancelled():
+                    logger.info(f"Webami prices: cancelled after {updated} updates")
                     break
+                cost = scraper.get_cost(upc)
+                if cost is not None:
+                    db.update_product_cost(upc, cost)
+                    updated += 1
 
-                cost = get_cost(upc)
-                if cost is None:
-                    continue
+            if not cancel.cancelled():
+                db.set_sync_state("webami_prices", datetime.now(timezone.utc))
 
-                db.update_product_cost(upc, cost)
-                updated += 1
-
-            db.set_sync_state(
-                "webami_prices",
-                datetime.now(timezone.utc)
+            logger.info(f"Webami: updated {updated}/{len(targets)} prices")
+            result = {
+                "prices_updated": updated,
+                "prices_total": len(targets),
+                "cancelled": cancel.cancelled(),
+            }
+            cancel.set_result(
+                "cancelled" if result["cancelled"] else "completed",
+                "Webami prices", counts=result,
             )
-
-            result = {"updated": updated}
-            cancel.set_result("completed", "Webami prices", counts=result)
-
             return result
-
         except Exception as e:
             cancel.set_result("failed", "Webami prices", detail=str(e))
-            logger.exception("Webami price sync failed")
+            logger.error(f"Webami price sync failed: {e}")
             raise
-
         finally:
             cancel.clear_running()

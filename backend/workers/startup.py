@@ -8,12 +8,11 @@ import logging
 
 import db.database as db
 from tmp.shopify_sync import ShopifySyncOrchestrator
-from backend.sync.bridge import GapFiller, PriceBridge
-from backend.webami.webami_sync import WebamiSyncOrchestrator
+from backend.webami.webami_service import WebamiSyncService
 
 logger = logging.getLogger(__name__)
 
-_webami = WebamiSyncOrchestrator()
+_webami = WebamiSyncService()
 _shopify = ShopifySyncOrchestrator()
 
 
