@@ -1,13 +1,19 @@
+"""
+Background job scheduler.
+Checks every 3 hours, runs if the configured interval has elapsed.
+"""
+
+import logging
 from datetime import datetime, timezone
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-import logging
 
 import config
-import sync.cancel as cancel
 import db.database as db
+import sync.cancel as cancel
 from sync.bridge import BridgeService
-from backend.webami.webami_service import WebamiSyncService
+from webami.webami_service import WebamiSyncService
 from shopify.shopify_service import ShopifySyncService
 
 logger = logging.getLogger(__name__)
@@ -21,11 +27,10 @@ INTERVAL_TRIGGER = 3
 
 
 def _hours_since_last_sync(state_key: str) -> float | None:
-    """Returns hours since last sync, or None if never synced."""
     state = db.get_sync_state(state_key)
-    if not state or not state["last_sync"]:
+    if not state or not state.last_sync:
         return None
-    last = state["last_sync"]
+    last = state.last_sync
     if last.tzinfo is None:
         last = last.replace(tzinfo=timezone.utc)
     delta = datetime.now(timezone.utc) - last
@@ -62,33 +67,21 @@ def _safe_run(fn, state_key: str, interval_hours: int):
 
 def start() -> None:
     _scheduler.add_job(
-        func=_safe_run(
-            _webami.sync_orders_incremental,
-            "webami_orders",
-            config.WEBAMI_ORDER_SYNC_INTERVAL_HOURS,
-        ),
-        trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),  # check every hour, run if interval elapsed
+        func=_safe_run(_webami.sync_orders_incremental, "webami_orders", config.WEBAMI_ORDER_SYNC_INTERVAL_HOURS),
+        trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
         id="webami_orders",
         replace_existing=True,
         max_instances=1,
     )
     _scheduler.add_job(
-        func=_safe_run(
-            _bridge.push_prices,
-            "webami_prices",
-            config.WEBAMI_PRICE_SYNC_INTERVAL_HOURS,
-        ),
+        func=_safe_run(_bridge.push_prices, "webami_prices", config.WEBAMI_PRICE_SYNC_INTERVAL_HOURS),
         trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
         id="price_sync",
         replace_existing=True,
         max_instances=1,
     )
     _scheduler.add_job(
-        func=_safe_run(
-            _shopify.run_incremental,
-            "shopify_products",
-            config.SHOPIFY_SYNC_INTERVAL_HOURS,
-        ),
+        func=_safe_run(_shopify.run_incremental, "shopify_products", config.SHOPIFY_SYNC_INTERVAL_HOURS),
         trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
         id="shopify_products",
         replace_existing=True,

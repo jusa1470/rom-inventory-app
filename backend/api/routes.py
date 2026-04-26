@@ -95,21 +95,25 @@ def callback(shop: str, code: str):
 
 @router.post("/sync/webami/orders/full")
 async def webami_orders_full():
-    return await run_in_threadpool(_webami.run_full)
+    return await run_in_threadpool(_webami.sync_orders_full)
 
 @router.post("/sync/webami/orders/incremental")
 async def webami_orders_incremental():
-    return await run_in_threadpool(_webami.run_incremental)
+    return await run_in_threadpool(_webami.sync_orders_incremental)
 
 @router.post("/sync/webami/products/full")
 async def webami_products_full():
-    return await run_in_threadpool(_webami.run_products_full)
+    return await run_in_threadpool(_webami.sync_products_full)
 
 @router.patch("/webami/orders/{guid}/items/{item_id}")
 async def update_order_item(guid: str, item_id: int, body: dict):
     qty = body.get("quantity_received", 0)
     db.mark_item_received(item_id, qty)
     return {"ok": True}
+
+@router.post("/sync/webami/prices")
+async def webami_prices():
+    return await run_in_threadpool(_webami.sync_prices)
 
 
 # ── SHOPIFY SYNC ────────────────────────────────────────────────────
@@ -123,7 +127,7 @@ async def shopify_incremental():
     return await run_in_threadpool(_shopify.run_incremental)
 
 
-# ── GAP FILL + PRICE SYNC (NO MORE BRIDGE LAYER) ────────────────────
+# ── GAP FILL + PRICE SYNC ───────────────────────────────────────────
 
 @router.post("/sync/prices")
 async def sync_prices():
@@ -135,7 +139,7 @@ async def gap_fill(body: GapFillRequest):
     return await run_in_threadpool(lambda: _bridge.fill_gaps(ids))
 
 
-# ── CRUD (unchanged but CLEANED) ────────────────────────────────────
+# ── CRUD ────────────────────────────────────────────────────────────
 
 @router.post("/shopify/products")
 async def create_products(body: CreateProductRequest):

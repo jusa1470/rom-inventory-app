@@ -4,3 +4,4 @@ tmp*
 temp*
 json.json
 *.db
+*.env

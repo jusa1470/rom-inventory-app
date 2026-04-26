@@ -1,13 +1,12 @@
 """
 Webami page scrapers.
- 
-All log lines are prefixed with a worker tag (e.g. [W2]) via
-session._worker_tag() so you can see exactly which thread each
-request came from in the terminal output.
- 
-scrape_product_page() fetches the product page AND the cost in a
-single worker call, keeping both requests on the same thread and
-eliminating inter-thread coordination overhead.
+
+All log lines are prefixed with a worker tag (e.g. [W2]) so you can
+see exactly which thread each request came from in the terminal.
+
+scrape_product_page() fetches all product data in a single HTTP request
+by parsing cost directly from the page, eliminating the separate price
+API call during full scrapes.
 """
 
 import logging
@@ -15,7 +14,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-import config as config
+import config
 from webami.session import authenticated_get, authenticated_post, _worker_tag
 
 logger = logging.getLogger(__name__)
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 ALLOWED_FORMATS = {"lp", "12\" single", "7\" single", "cd", "cassette"}
 
 
-# ── Field scrapers (accept pre-parsed soup) ──────────────────────────
+# ── Field scrapers ────────────────────────────────────────────────────
 
 def get_album(soup: BeautifulSoup, upc: str) -> Optional[str]:
     elem = soup.find(class_="aec-main-title")
@@ -73,25 +72,25 @@ def get_images(soup: BeautifulSoup, upc: str) -> Optional[list[str]]:
                 image_urls.append(url)
 
     if image_urls:
-        return list(dict.fromkeys(image_urls))
+        return list(dict.fromkeys(image_urls))  # dedupe, preserve order
+
     logger.warning(f"{_worker_tag()} UPC {upc}: no images found")
     return None
 
 
 def get_features(soup: BeautifulSoup, upc: str) -> Optional[list[str]]:
-    features = soup.find(class_="aec-title-featurelist aec-main-desc")
-    if features:
-        # remove outer ()
-        features = features.text.strip()
-        if features.startswith("(") and features.endswith(")"):
-            features = features[1:-1]
-        return [f.strip() for f in features.split(",") if f.strip()]
+    elem = soup.find(class_="aec-title-featurelist aec-main-desc")
+    if elem:
+        text = elem.text.strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1]
+        return [f.strip() for f in text.split(",") if f.strip()]
     logger.debug(f"{_worker_tag()} UPC {upc}: no features found")
     return None
 
 
 def get_format(soup: BeautifulSoup, upc: str) -> Optional[str]:
-    for li in soup.find_all(class_="aec-title-featurelist"):
+    for li in soup.select(".aec-title-featurelist"):
         span = li.find("span")
         if span and span.text.strip() == "Format:":
             return li.text.replace("Format:", "").strip()
@@ -130,10 +129,29 @@ def _convert_weight_to_grams(raw: str) -> Optional[float]:
     return None
 
 
-# ── HTTP-level scrapers ──────────────────────────────────────────────
+# ── Cost scrapers ─────────────────────────────────────────────────────
 
-def get_cost(upc: str) -> Optional[float]:
-    """Hits the fast JSON price endpoint — no full page parse needed."""
+def get_cost_from_page(soup: BeautifulSoup, upc: str) -> Optional[float]:
+    """
+    Parse Webami cost directly from the product page.
+    Used during full product scrapes — no extra HTTP request needed.
+    The Webami price is in .aec-new-price strong, e.g. /<strong>32.90</strong>
+    """
+    price_elem = soup.select_one(".aec-new-price strong")
+    if price_elem:
+        try:
+            return float(price_elem.text.strip())
+        except ValueError:
+            pass
+    logger.warning(f"{_worker_tag()} UPC {upc}: cost not found on page")
+    return None
+
+
+def get_cost_from_api(upc: str) -> Optional[float]:
+    """
+    Fetch cost via the fast /ajax/priceavail endpoint.
+    Used for price-only syncs where a full page scrape is not needed.
+    """
     try:
         resp = authenticated_post(
             f"{config.WEBAMI_BASE_URL}/ajax/priceavail",
@@ -149,19 +167,17 @@ def get_cost(upc: str) -> Optional[float]:
         if data and data[0].get("Price"):
             return float(data[0]["Price"].replace("$", "").strip())
     except Exception:
-        logger.exception(f"{_worker_tag()} UPC {upc}: failed to retrieve cost")
+        logger.exception(f"{_worker_tag()} UPC {upc}: failed to retrieve cost from API")
     return None
 
 
-def scrape_product_page(upc: str):
-    """
-    Fetch the product detail page AND the price in a single worker call.
-    Both HTTP requests run on the same thread using that thread's session,
-    so all WEBAMI_SCRAPE_WORKERS workers are fully utilised concurrently.
- 
-    Logs include [WN] worker tag so you can confirm parallelism in the terminal.
-    """
+# ── Page scraper ──────────────────────────────────────────────────────
 
+def scrape_product_page(upc: str) -> Optional[dict]:
+    """
+    Fetch and parse a product page in a single HTTP request.
+    Cost is parsed from the page HTML — no separate price API call needed.
+    """
     tag = _worker_tag()
     logger.debug(f"{tag} Scraping UPC {upc}")
 
@@ -174,16 +190,15 @@ def scrape_product_page(upc: str):
         logger.exception(f"{tag} UPC {upc}: request failed")
         return None
 
-    soup = BeautifulSoup(resp.content, "html.parser")
+    soup = BeautifulSoup(resp.content, "lxml")
 
     if not soup.find(class_="aec-main-title"):
         logger.error(f"{tag} UPC {upc}: product page not found")
         return None
-    
-    format = get_format(soup, upc)
-    if format and format.lower() not in ALLOWED_FORMATS:
-        print(format, format.lower())
-        logger.error(f"{tag} UPC {upc}: unrecognized format: {format!r}")
+
+    fmt = get_format(soup, upc)
+    if fmt and fmt.lower() not in ALLOWED_FORMATS:
+        logger.error(f"{tag} UPC {upc}: unrecognized format: {fmt!r}")
         return None
 
     return {
@@ -193,6 +208,6 @@ def scrape_product_page(upc: str):
         "image_urls": get_images(soup, upc),
         "features": get_features(soup, upc),
         "weight_grams": get_weight(soup, upc),
-        "cost": get_cost(upc),
-        "format": format
+        "cost": get_cost_from_page(soup, upc),
+        "format": fmt,
     }

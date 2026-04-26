@@ -58,8 +58,9 @@ def _login(session: requests.Session) -> None:
     )
     response.raise_for_status()
     data = response.json()
-    if data.get("errors") != []:
-        logger.warning(f"{tag} Webami login warning: {data.get('errors')}")
+    errors = data.get("errors")
+    if errors:
+        logger.warning(f"{tag} Webami login warning: {errors}")
     else:
         logger.info(f"{tag} Webami login successful")
 
