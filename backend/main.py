@@ -3,13 +3,13 @@ App entry point.
 """
 
 import logging
-import logging.config
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import asyncio
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,7 +22,6 @@ from sync.scheduler import start as start_scheduler, stop as stop_scheduler
 from workers.startup import run_startup_sync
 
 # ── Test Mode ─────────────────────────────────────────────────────────
-
 
 # ── Logging setup ─────────────────────────────────────────────────────
 # Format matches what you see in the terminal:
@@ -39,25 +38,24 @@ logging.basicConfig(
 # Silence uvicorn's access log for the high-frequency polling endpoint
 # so it doesn't spam the terminal every 2.5 seconds.
 class _SuppressPollingFilter(logging.Filter):
-    _SUPPRESS = {"/api/sync/running"}
+    _SUPPRESS: set[str] = {"/api/sync/running"}
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
+        msg: str = record.getMessage()
         return not any(p in msg for p in self._SUPPRESS)
 
 logging.getLogger("uvicorn.access").addFilter(_SuppressPollingFilter())
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
-STATIC_DIR = Path(__file__).parent.parent / "static"
-
+# backend/main.py → up two levels → project root → static/
+STATIC_DIR: Path = Path(__file__).parent.parent / "static"
 
 def _check_credentials():
     store = CredentialStore()
     if store.is_first_run():
-        logger.info("First run — launching setup wizard")
-        store.setup_wizard()
-
+        logger.critical("Credentials not configured. Run setup.py first.")
+        sys.exit(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -70,14 +68,12 @@ async def lifespan(app: FastAPI):
     init_db()
     start_scheduler()
 
-    import asyncio
     asyncio.create_task(run_in_threadpool(run_startup_sync))
 
     yield
 
     stop_scheduler()
     logger.info("App shutdown complete")
-
 
 app = FastAPI(title=config.APP_NAME, lifespan=lifespan)
 app.include_router(router, prefix="/api")
@@ -86,7 +82,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
     return FileResponse(STATIC_DIR / "index.html")
-
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)

@@ -4,172 +4,161 @@ Webami order discovery and parsing.
 
 import logging
 import re
-import threading
-from typing import Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
+from bs4.element import AttributeValueList
+from requests import Response
 
 import config
 from db.models import WebamiOrder
-from webami.session import authenticated_get
+from webami.session import authenticated_get, _worker_tag
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
+# ── Helpers ───────────────────────────────────────────────────────────
 
-def parse_webami_datetime(value: str | None):
+def _parse_webami_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
-    dt = datetime.strptime(value, "%m/%d/%Y %H:%M")
-    dt = dt.replace(tzinfo=ZoneInfo("America/Denver"))
+    dt: datetime = datetime.strptime(value, "%m/%d/%Y %H:%M")
+    dt: datetime = dt.replace(tzinfo=ZoneInfo("America/Denver"))
     return dt.astimezone(ZoneInfo("UTC"))
 
+# ── Order list parsing ────────────────────────────────────────────────
 
-def parse_order_row(tr) -> WebamiOrder | None:
+def _parse_order_row(tr) -> WebamiOrder | None:
     checkbox = tr.find("input", {"name": "checkedRecords"})
     if not checkbox:
         return None
 
-    guid = checkbox.get("value")
+    guid: str = checkbox.get("value")
     tds = tr.find_all("td")
 
     order_link = tr.select_one("a.aec-showorder-a")
     order_number = order_link.text.strip() if order_link else None
-
     order_name = tds[2].get_text(strip=True) if len(tds) > 2 else None
-
     order_date_raw = tds[4].get_text(strip=True) if len(tds) > 4 else None
-    order_date = parse_webami_datetime(order_date_raw)
 
     return WebamiOrder(
         guid=guid,
         order_number=order_number,
         order_name=order_name,
-        order_date=order_date,
+        order_date=_parse_webami_datetime(order_date_raw),
+        number_of_products=0,  # populated later when order page is parsed
     )
 
-
-def parse_orders_from_soup(soup: BeautifulSoup) -> list[WebamiOrder]:
-    items_grid = soup.find(id="Grid")
+def _parse_orders_from_soup(soup: BeautifulSoup) -> list[WebamiOrder]:
+    items_grid: Tag | None = soup.find(id="Grid")
     if not items_grid:
         logger.warning("No orders Grid found")
         return []
 
     orders = []
     for tr in items_grid.find_all("tr"):
-        order = parse_order_row(tr)
+        order: WebamiOrder | None = _parse_order_row(tr)
         if order:
             orders.append(order)
 
     return orders
 
+def _fetch_orders_page(page: int) -> BeautifulSoup:
+    params: dict[str, int] = {} if page == 1 else {"Grid-page": page}
+    resp: Response = authenticated_get(
+        f"{config.WEBAMI_BASE_URL}/webami/submittedorders",
+        params=params,
+    )
+    return BeautifulSoup(resp.text, "lxml")
+
+# ── Public: Order list ────────────────────────────────────────────────
 
 def get_all_orders() -> list[WebamiOrder]:
-    orders: list[WebamiOrder] = []
+    soup: BeautifulSoup = _fetch_orders_page(1)
+    orders: list[WebamiOrder] = _parse_orders_from_soup(soup)
 
-    resp = authenticated_get(f"{config.WEBAMI_BASE_URL}/webami/submittedorders")
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    orders.extend(parse_orders_from_soup(soup))
-
-    # pagination
     total = 0
-    pager = soup.find(class_="k-pager-info")
+    pager: Tag | None = soup.find(class_="k-pager-info")
     if pager:
-        m = re.search(r"of (\d+) items", pager.text)
+        m: re.Match[str] | None = re.search(r"of (\d+) items", pager.text)
         if m:
             total = int(m.group(1))
 
     page_size = 25
-    total_pages = max(1, (total + page_size - 1) // page_size)
-
+    total_pages: int = max(1, (total + page_size - 1) // page_size)
     logger.info(f"Order pages: {total_pages}, total orders: {total}")
 
     for page in range(2, total_pages + 1):
-        resp = authenticated_get(
-            f"{config.WEBAMI_BASE_URL}/webami/submittedorders",
-            params={"Grid-page": page},
-        )
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        before = len(orders)
-        orders.extend(parse_orders_from_soup(soup))
-
+        before: int = len(orders)
+        orders.extend(_parse_orders_from_soup(_fetch_orders_page(page)))
         logger.info(f"Page {page}: {len(orders)}/{total}")
-
         if len(orders) == before:
             break
 
     return orders
-
 
 def get_recent_orders(max_pages: int = -1) -> list[WebamiOrder]:
     if max_pages <= 0:
         max_pages = config.WEBAMI_ORDERS_INCREMENTAL_PAGES
 
     orders: list[WebamiOrder] = []
-
     for page in range(1, max_pages + 1):
-        params = {} if page == 1 else {"Grid-page": page}
-
-        resp = authenticated_get(
-            f"{config.WEBAMI_BASE_URL}/webami/submittedorders",
-            params=params,
-        )
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        orders.extend(parse_orders_from_soup(soup))
+        orders.extend(_parse_orders_from_soup(_fetch_orders_page(page)))
 
     return orders
 
+# ── Public: Order detail ──────────────────────────────────────────────
 
-def parse_order_page(guid: str) -> list[str]:
+def parse_order_page(guid: str) -> list[dict]:
     """
-    Fetch and parse a single order page.
-    Returns (upcs, order_date) where upcs = [str].
+    Fetch a single order page and return its items as {upc, quantity} dicts.
+    UPC is parsed from the product link href — more reliable than text parsing.
     """
-    resp = authenticated_get(f"{config.WEBAMI_BASE_URL}/webami/vieworder/{guid}")
-    soup = BeautifulSoup(resp.text, "html.parser")
+    resp: Response = authenticated_get(f"{config.WEBAMI_BASE_URL}/webami/vieworder/{guid}")
+    soup = BeautifulSoup(resp.text, "lxml")
 
-    upcs: list[str] = []
-    items_grid = soup.find(id="ItemsGrid")
+    items = []
+    items_grid: Tag | None = soup.find(id="ItemsGrid")
     if not items_grid:
         logger.warning(f"Order {guid}: no ItemsGrid found")
-        return upcs
+        return items
 
-    for tr in items_grid.find_all("tr"):
+    for tr in items_grid.select("tbody tr"):
         tds = tr.find_all("td")
-        if not tds or len(tds) < 5:
-            continue
-        item_td = tds[0]
-        if not item_td.find("b"):
+        if len(tds) < 2:
             continue
 
-        lines = [
-            line.strip()
-            for line in item_td.get_text(separator="\n").split("\n")
-            if line.strip()
-        ]
-        upc = ""
-        if len(lines) > 2 and "/" in lines[2]:
-            upc = lines[2].split("/")[-1].strip()
+        link: Tag | None = tds[0].select_one("b a")
+        if not link:
+            continue
 
-        if upc:
-            upcs.append(upc)
+        href: str | AttributeValueList | None = link.get("href")
+        if not href or not isinstance(href, str):
+            continue
+        upc: str = href.rstrip("/").split("/")[-1]
+        if not upc:
+            continue
 
-    return upcs
+        try:
+            quantity = int(tds[1].get_text(strip=True))
+        except ValueError:
+            continue
 
+        if quantity > 0:
+            items.append({
+                "upc": upc,
+                "quantity": quantity,
+                "title": link.text.strip(),
+                "format": tds[4].get_text(strip=True),
+                "cost": float(tds[5].get_text(strip=True).replace("$", "").strip()),
+            })
 
-def parse_order_page_worker(guid: str) -> tuple[str, list[str]]:
-    """
-    Worker-safe wrapper around parse_order_page.
-    Returns (guid, upcs, order_date) so the caller knows which guid
-    each future result belongs to. Logs include the thread name.
-    """
-    name = threading.current_thread().name
-    tag  = f"[W{name.rsplit('_',1)[-1]}]" if "_" in name else f"[{name}]"
+    return items
+
+def parse_order_page_worker(guid: str) -> tuple[str, list[dict]]:
+    """Worker-safe wrapper — returns (guid, items) for use with ThreadPoolExecutor."""
+    tag: str = _worker_tag()
     logger.debug(f"{tag} Fetching order {guid}")
-    upcs = parse_order_page(guid)
-    logger.info(f"{tag} Order {guid}: {len(upcs)} item(s)")
-    return guid, upcs
+    items = parse_order_page(guid)
+    logger.debug(f"{tag} Order {guid}: {len(items)} item(s)")
+    return guid, items

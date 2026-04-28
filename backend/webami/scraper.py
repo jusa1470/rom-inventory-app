@@ -1,141 +1,197 @@
 """
-Webami page scrapers.
- 
-All log lines are prefixed with a worker tag (e.g. [W2]) via
-session._worker_tag() so you can see exactly which thread each
-request came from in the terminal output.
- 
-scrape_product_page() fetches the product page AND the cost in a
-single worker call, keeping both requests on the same thread and
-eliminating inter-thread coordination overhead.
+Optimized Webami scraper
+
+Goals:
+- Single HTTP request per product
+- Minimal DOM traversal
+- Prefer structured data when reliable
+- Deterministic + thread-safe
 """
 
+import json
 import logging
 from typing import Optional
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
+from bs4.element import AttributeValueList
+from requests import Response
 
-import config as config
+import config
 from webami.session import authenticated_get, authenticated_post, _worker_tag
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_FORMATS = {"lp", "12\" single", "7\" single", "cd", "cassette"}
+ALLOWED_MUSIC_FORMATS: set[str] = {"lp", "12\" single", "7\" single", "cd", "cassette"}
+ALLOWED_ITEM_FORMATS: set[str] = {"headphones", "vinyl accessories", "bags / sleeves", "turntables", "apparel", "media player accessories", "speaker & components"}
 
 
-# ── Field scrapers (accept pre-parsed soup) ──────────────────────────
+# ─────────────────────────────────────────────
+# Core helpers
+# ─────────────────────────────────────────────
 
-def get_album(soup: BeautifulSoup, upc: str) -> Optional[str]:
-    elem = soup.find(class_="aec-main-title")
-    if elem:
-        h2 = elem.find("h2")
-        if h2:
-            text = h2.text.strip()
-            if "[" in text and "]" in text:
-                text = text.split("[")[0].strip()
-            return text
-    logger.warning(f"{_worker_tag()} UPC {upc}: album name not found")
+def _get_json_ld(soup: BeautifulSoup) -> dict | None:
+    script: Tag | None = soup.select_one("script.ProductPageStrData")
+    if not script or not script.string:
+        return None
+    try:
+        return json.loads(script.string)
+    except Exception:
+        return None
+
+
+def _get_primaryinfo(soup: BeautifulSoup) -> Tag | None:
+    return soup.find(id="product-primaryinfo")
+
+
+# ─────────────────────────────────────────────
+# Field extractors
+# ─────────────────────────────────────────────
+
+def get_title(soup: BeautifulSoup, upc: str) -> Optional[str]:
+    el: Tag | None = soup.select_one(".aec-main-title h2")
+    if el and el.text:
+        text = el.text.strip()
+        if "[" in text and "]" in text:
+            text = text.split("[")[0].strip()
+        return text
+
+    logger.warning(f"{_worker_tag()} UPC {upc}: title not found")
     return None
 
 
 def get_artist(soup: BeautifulSoup, upc: str) -> Optional[str]:
-    elem = soup.find(class_="aec-main-artist")
-    if elem:
-        a = elem.find("a")
-        if a:
-            return a.text.strip()
-    logger.warning(f"{_worker_tag()} UPC {upc}: artist not found")
+    el: Tag | None = soup.select_one(".aec-main-artist a")
+    if el and el.text:
+        return el.text.strip()
+
+    logger.debug(f"{_worker_tag()} UPC {upc}: artist not found")
     return None
 
 
 def get_images(soup: BeautifulSoup, upc: str) -> Optional[list[str]]:
-    image_urls = []
+    urls: list[str] = []
 
-    thumb_container = soup.select_one(".thumb-gallery-container")
-    if thumb_container:
-        for el in thumb_container.find_all(["img", "a"]):
-            url = None
-            if el.name == "img":
-                url = el.get("data-zoom") or el.get("data-zoom-image")
-            elif el.name == "a" and "chocolat-image" in (el.get("class") or []):
-                url = el.get("href")
-            if url:
-                image_urls.append(url)
-    else:
-        main_img = soup.select_one(".main-cover img")
-        if main_img:
-            url = (
-                main_img.get("data-zoom")
-                or main_img.get("data-zoom-image")
-                or main_img.get("src")
-            )
+    for el in soup.select(".thumb-gallery-container img, .thumb-gallery-container a.chocolat-image"):
+        if el.name == "img":
+            url: str | AttributeValueList | None = el.get("data-zoom") or el.get("data-zoom-image")
+        else:
+            url = el.get("href")
+        if url:
+            urls.append(str(url))
+
+    if not urls:
+        main: Tag | None = soup.select_one(".main-cover img")
+        if main:
+            url = main.get("data-zoom") or main.get("data-zoom-image") or main.get("src")
             if url and "no_image" not in url:
-                image_urls.append(url)
+                urls.append(str(url))
 
-    if image_urls:
-        return list(dict.fromkeys(image_urls))
-    logger.warning(f"{_worker_tag()} UPC {upc}: no images found")
+    if urls:
+        return list(dict.fromkeys(urls))
+
+    logger.debug(f"{_worker_tag()} UPC {upc}: no images found")
     return None
 
 
-def get_features(soup: BeautifulSoup, upc: str) -> Optional[list[str]]:
-    features = soup.find(class_="aec-title-featurelist aec-main-desc")
-    if features:
-        # remove outer ()
-        features = features.text.strip()
-        if features.startswith("(") and features.endswith(")"):
-            features = features[1:-1]
-        return [f.strip() for f in features.split(",") if f.strip()]
-    logger.debug(f"{_worker_tag()} UPC {upc}: no features found")
+def get_features(soup: BeautifulSoup) -> Optional[list[str]]:
+    el: Tag | None = soup.select_one(".aec-main-desc")
+    if el and el.text:
+        text = el.text.strip().strip("()")
+        return [f.strip() for f in text.split(",") if f.strip()]
     return None
 
 
 def get_format(soup: BeautifulSoup, upc: str) -> Optional[str]:
-    for li in soup.find_all(class_="aec-title-featurelist"):
-        span = li.find("span")
-        if span and span.text.strip() == "Format:":
-            return li.text.replace("Format:", "").strip()
+    el: Tag | None = soup.select_one(".aec-attr")
+    if el:
+        text_nodes: list[str] = [t.strip() for t in el.find_all(string=True, recursive=False)]
+        for t in text_nodes:
+            if t:
+                return t
+
     logger.warning(f"{_worker_tag()} UPC {upc}: format not found")
     return None
 
 
-def get_weight(soup: BeautifulSoup, upc: str) -> Optional[float]:
-    primaryinfo = soup.find(id="product-primaryinfo")
-    if primaryinfo:
-        for item in primaryinfo.find_all("li"):
-            span = item.find("span")
-            if span and "Weight:" in span.text:
-                raw = item.text.replace("Weight:", "").strip()
-                grams = _convert_weight_to_grams(raw)
-                if grams is not None:
-                    return grams
-                logger.warning(f"{_worker_tag()} UPC {upc}: unexpected weight format: {raw!r}")
-                return None
-    logger.warning(f"{_worker_tag()} UPC {upc}: weight not found")
+def get_weight(primary: Tag | None, upc: str) -> Optional[float]:
+    if not primary:
+        return None
+
+    for li in primary.find_all("li"):
+        span: Tag | None = li.find("span")
+        if span and "Weight:" in span.text:
+            raw = li.text.replace("Weight:", "").strip()
+            return _convert_weight_to_grams(raw)
+
+    logger.debug(f"{_worker_tag()} UPC {upc}: weight not found")
     return None
 
 
 def _convert_weight_to_grams(raw: str) -> Optional[float]:
     try:
-        if "lbs" in raw or "lb" in raw:
+        if "lb" in raw:
             return round(float(raw.replace("lbs", "").replace("lb", "").strip()) * 453.592, 2)
-        elif "kg" in raw:
+        if "kg" in raw:
             return round(float(raw.replace("kg", "").strip()) * 1000, 2)
-        elif "oz" in raw:
+        if "oz" in raw:
             return round(float(raw.replace("oz", "").strip()) * 28.3495, 2)
-        elif "g" in raw:
+        if "g" in raw:
             return float(raw.replace("g", "").strip())
-    except ValueError:
-        pass
+    except Exception:
+        return None
     return None
 
 
-# ── HTTP-level scrapers ──────────────────────────────────────────────
+def get_genres(primary: Tag | None) -> Optional[list[str]]:
+    if not primary:
+        return None
 
-def get_cost(upc: str) -> Optional[float]:
-    """Hits the fast JSON price endpoint — no full page parse needed."""
+    for li in primary.find_all("li"):
+        span: Tag | None = li.find("span")
+        if span and "Genre:" in span.text:
+            return [a.text.strip() for a in li.find_all("a") if a.text.strip()]
+
+    return None
+
+
+def get_brand(soup: BeautifulSoup, primary: Tag | None) -> Optional[str]:
+    data = _get_json_ld(soup)
+    if data and data.get("brand"):
+        return data["brand"].strip()
+
+    if primary:
+        for li in primary.find_all("li"):
+            span: Tag | None = li.find("span")
+            if span and "Brand:" in span.text:
+                a: Tag | None = li.find("a")
+                if a:
+                    return a.text.strip()
+
+    return None
+
+
+def get_cost(soup: BeautifulSoup, upc: str) -> Optional[float]:
     try:
-        resp = authenticated_post(
+        el: Tag | None = soup.select_one(".aec-new-price strong")
+        if el and el.text:
+            return float(el.text.strip())
+
+        listing: Tag | None = soup.select_one(".aec-listing-price")
+        if listing and listing.text:
+            return float(listing.text.strip())
+
+    except Exception:
+        logger.exception(f"{_worker_tag()} UPC {upc}: cost parse failed")
+
+    return None
+
+def get_cost_via_api(upc: str) -> Optional[float]:
+    """
+    Fetch cost via the fast /ajax/priceavail endpoint.
+    Used for price-only syncs where a full page scrape is not needed.
+    """
+    try:
+        resp: Response = authenticated_post(
             f"{config.WEBAMI_BASE_URL}/ajax/priceavail",
             data={"ids": upc},
             headers={
@@ -149,24 +205,20 @@ def get_cost(upc: str) -> Optional[float]:
         if data and data[0].get("Price"):
             return float(data[0]["Price"].replace("$", "").strip())
     except Exception:
-        logger.exception(f"{_worker_tag()} UPC {upc}: failed to retrieve cost")
+        logger.exception(f"{_worker_tag()} UPC {upc}: failed to retrieve cost from API")
     return None
 
 
-def scrape_product_page(upc: str):
-    """
-    Fetch the product detail page AND the price in a single worker call.
-    Both HTTP requests run on the same thread using that thread's session,
-    so all WEBAMI_SCRAPE_WORKERS workers are fully utilised concurrently.
- 
-    Logs include [WN] worker tag so you can confirm parallelism in the terminal.
-    """
+# ─────────────────────────────────────────────
+# Main scraper
+# ─────────────────────────────────────────────
 
-    tag = _worker_tag()
+def scrape_product_page(upc: str) -> Optional[dict]:
+    tag: str = _worker_tag()
     logger.debug(f"{tag} Scraping UPC {upc}")
 
     try:
-        resp = authenticated_get(
+        resp: Response = authenticated_get(
             f"{config.WEBAMI_BASE_URL}/{upc}",
             allow_redirects=True,
         )
@@ -174,25 +226,39 @@ def scrape_product_page(upc: str):
         logger.exception(f"{tag} UPC {upc}: request failed")
         return None
 
-    soup = BeautifulSoup(resp.content, "html.parser")
+    soup = BeautifulSoup(resp.content, "lxml")
 
-    if not soup.find(class_="aec-main-title"):
+    if not soup.select_one(".aec-main-title"):
         logger.error(f"{tag} UPC {upc}: product page not found")
-        return None
-    
-    format = get_format(soup, upc)
-    if format and format.lower() not in ALLOWED_FORMATS:
-        print(format, format.lower())
-        logger.error(f"{tag} UPC {upc}: unrecognized format: {format!r}")
+        with open("upcs_not_found.txt", "a") as f:
+            f.write(upc + "\n")
         return None
 
-    return {
+    primary: Tag | None = _get_primaryinfo(soup)
+    format: str | None = get_format(soup, upc)
+
+    base = {
         "upc": upc,
-        "album": get_album(soup, upc),
-        "artist": get_artist(soup, upc),
+        "title": get_title(soup, upc),
         "image_urls": get_images(soup, upc),
-        "features": get_features(soup, upc),
-        "weight_grams": get_weight(soup, upc),
-        "cost": get_cost(upc),
-        "format": format
+        "weight_grams": get_weight(primary, upc),
+        "cost": get_cost(soup, upc),
+        "format": format,
     }
+
+    if format and format.lower() in ALLOWED_MUSIC_FORMATS:
+        base.update({
+            "artist": get_artist(soup, upc),
+            "features": get_features(soup),
+            "genres": get_genres(primary),
+        })
+        return base
+
+    if format and format.lower() in ALLOWED_ITEM_FORMATS:
+        base.update({
+            "brand": get_brand(soup, primary),
+        })
+        return base
+
+    logger.error(f"{tag} UPC {upc}: unknown format {format!r}")
+    return None

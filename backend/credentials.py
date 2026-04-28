@@ -25,10 +25,9 @@ Usage:
 """
 
 import hashlib
-import os
 import keyring
+from keyring.errors import PasswordDeleteError
 from config import APP_NAME
-
 
 # Keys stored in the keychain under APP_NAME as the service name
 _KEYS = {
@@ -36,13 +35,11 @@ _KEYS = {
     "webami_password",
     "shopify_token",
     "test_shopify_token",
-    "app_password_hash",  # we store a hash, never the raw password
+    "app_password_hash",
 }
-
 
 class CredentialError(Exception):
     pass
-
 
 class CredentialStore:
     def __init__(self, service: str = APP_NAME):
@@ -56,7 +53,7 @@ class CredentialStore:
         """Retrieve a credential. Raises CredentialError if not found."""
         if key not in _KEYS:
             raise CredentialError(f"Unknown credential key: {key!r}")
-        value = keyring.get_password(self.service, key)
+        value: str | None = keyring.get_password(self.service, key)
         if value is None:
             raise CredentialError(
                 f"Credential {key!r} not set. Run the setup wizard first."
@@ -73,15 +70,11 @@ class CredentialStore:
         """Remove a credential from the keychain."""
         try:
             keyring.delete_password(self.service, key)
-        except keyring.errors.PasswordDeleteError:
+        except PasswordDeleteError:
             pass
 
     def is_set(self, key: str) -> bool:
-        try:
-            keyring.get_password(self.service, key)
-            return True
-        except Exception:
-            return False
+        return keyring.get_password(self.service, key) is not None
 
     # ------------------------------------------------------------------
     # App master password
@@ -89,12 +82,12 @@ class CredentialStore:
 
     def set_app_password(self, password: str) -> None:
         """Hash and store the app master password."""
-        hashed = self._hash(password)
+        hashed: str = self._hash(password)
         keyring.set_password(self.service, "app_password_hash", hashed)
 
     def verify_app_password(self, password: str) -> bool:
         """Return True if password matches stored hash, else raise."""
-        stored = keyring.get_password(self.service, "app_password_hash")
+        stored: str | None = keyring.get_password(self.service, "app_password_hash")
         if stored is None:
             raise CredentialError("App password not configured.")
         if self._hash(password) != stored:
@@ -109,32 +102,8 @@ class CredentialStore:
         """True if no credentials have been configured yet."""
         return keyring.get_password(self.service, "app_password_hash") is None
 
-    def setup_wizard(self) -> None:
-        """
-        Interactive CLI wizard for first-run credential setup.
-        Replace with GUI prompts when the frontend is added.
-        """
-        import getpass
-
-        print(f"\n=== {APP_NAME} First-Run Setup ===\n")
-
-        pw = getpass.getpass("Create app master password: ")
-        pw2 = getpass.getpass("Confirm app master password: ")
-        if pw != pw2:
-            raise CredentialError("Passwords do not match.")
-        self.set_app_password(pw)
-
-        self.set("webami_username", input("Webami email: ").strip())
-        self.set("webami_password", getpass.getpass("Webami password: "))
-        self.set("shopify_token", getpass.getpass("Shopify Admin API token: "))
-        self.set("test_shopify_token", getpass.getpass("Test Shopify Admin API token: "))
-
-        print("\n✅  Credentials saved to OS keychain.\n")
-
     def reset_all(self) -> None:
-        """Wipe all stored credentials. User will need to re-run setup."""
-        all_keys = _KEYS | {"app_password_hash"}
-        for key in all_keys:
+        for key in _KEYS:
             self.delete(key)
 
     # ------------------------------------------------------------------
@@ -143,5 +112,5 @@ class CredentialStore:
 
     @staticmethod
     def _hash(value: str) -> str:
-        salt = APP_NAME.encode()
+        salt: bytes = APP_NAME.encode()
         return hashlib.sha256(salt + value.encode()).hexdigest()

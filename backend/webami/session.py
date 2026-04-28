@@ -10,6 +10,7 @@ Each worker thread gets its own session on first use, logs in once,
 and reuses it for all subsequent requests on that thread.
 """
 
+from _thread import _local
 import logging
 import threading
 import requests
@@ -17,21 +18,19 @@ import requests
 import config
 from credentials import CredentialStore
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _creds = CredentialStore()
-_local = threading.local()   # thread-local storage
-
+_local_thread: _local = threading.local()   # thread-local storage
 
 def _worker_tag() -> str:
     """Short identifier for the current thread, e.g. '[W3]'."""
-    name = threading.current_thread().name
+    name: str = threading.current_thread().name
     # ThreadPoolExecutor names threads 'ThreadPoolExecutor-0_N'
     if "_" in name:
-        idx = name.rsplit("_", 1)[-1]
+        idx: str = name.rsplit("_", 1)[-1]
         return f"[W{idx}]"
     return f"[{name}]"
-
 
 def _build_session() -> requests.Session:
     session = requests.Session()
@@ -44,11 +43,10 @@ def _build_session() -> requests.Session:
     })
     return session
 
-
 def _login(session: requests.Session) -> None:
-    tag = _worker_tag()
+    tag: str = _worker_tag()
     logger.info(f"{tag} Logging in to Webami")
-    response = session.post(
+    response: requests.Response = session.post(
         f"{config.WEBAMI_BASE_URL}/api/authentication/authenticate",
         json={
             "EmailAddress": _creds.get("webami_username"),
@@ -58,42 +56,39 @@ def _login(session: requests.Session) -> None:
     )
     response.raise_for_status()
     data = response.json()
-    if data.get("errors") != []:
-        logger.warning(f"{tag} Webami login warning: {data.get('errors')}")
+    errors = data.get("errors")
+    if errors:
+        logger.warning(f"{tag} Webami login warning: {errors}")
     else:
         logger.info(f"{tag} Webami login successful")
-
 
 def get_session() -> requests.Session:
     """
     Return this thread's authenticated session, creating and logging
     in if this is the first request on the current thread.
     """
-    if not hasattr(_local, "session") or _local.session is None:
-        _local.session = _build_session()
-        _login(_local.session)
-    return _local.session
-
+    if not hasattr(_local_thread, "session") or _local_thread.session is None:
+        _local_thread.session = _build_session()
+        _login(_local_thread.session)
+    return _local_thread.session
 
 def reset_session() -> None:
     """Force a fresh login on the next get_session() call for this thread."""
-    _local.session = None
+    _local_thread.session = None
     logger.info(f"{_worker_tag()} Webami session reset")
-
 
 def authenticated_get(url: str, **kwargs) -> requests.Response:
     """GET with automatic re-auth on session expiry."""
-    resp = get_session().get(url, **kwargs)
+    resp: requests.Response = get_session().get(url, **kwargs)
     if resp.status_code == 401:
         reset_session()
         resp = get_session().get(url, **kwargs)
     resp.raise_for_status()
     return resp
 
-
 def authenticated_post(url: str, **kwargs) -> requests.Response:
     """POST with automatic re-auth on session expiry."""
-    resp = get_session().post(url, **kwargs)
+    resp: requests.Response = get_session().post(url, **kwargs)
     if resp.status_code == 401:
         reset_session()
         resp = get_session().post(url, **kwargs)

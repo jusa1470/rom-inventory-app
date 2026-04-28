@@ -8,19 +8,19 @@ Usage:
 
 import getpass
 import sys
+from typing import LiteralString
 import keyring
 import keyring.errors
 
-from credentials import CredentialStore, CredentialError
+from credentials import CredentialStore
 from config import APP_NAME
-
 
 def check_keychain_available():
     """
     Verify the OS keychain is actually writable before we start.
     On Linux without a running keyring daemon this will fail.
     """
-    test_service = f"{APP_NAME}_test"
+    test_service: LiteralString = f"{APP_NAME}_test"
     test_key = "_setup_check"
     try:
         keyring.set_password(test_service, test_key, "ok")
@@ -38,7 +38,6 @@ def check_keychain_available():
         print(f"\n❌  Keychain test failed: {e}\n")
         sys.exit(1)
 
-
 def main():
     print(f"\n{'=' * 50}")
     print(f"  {APP_NAME} — First-Time Setup")
@@ -52,7 +51,7 @@ def main():
 
     if not store.is_first_run():
         print("⚠️  Credentials are already configured.")
-        overwrite = input("Overwrite existing credentials? [y/N]: ").strip().lower()
+        overwrite: str = input("Overwrite existing credentials? [y/N]: ").strip().lower()
         if overwrite != "y":
             print("Setup cancelled.")
             sys.exit(0)
@@ -61,8 +60,8 @@ def main():
     print("Create a master password for this app.")
     print("This is what you'll enter when opening the app.\n")
     while True:
-        pw = getpass.getpass("Master password: ")
-        pw2 = getpass.getpass("Confirm master password: ")
+        pw: str = getpass.getpass("Master password: ")
+        pw2: str = getpass.getpass("Confirm master password: ")
         if pw == pw2:
             break
         print("Passwords don't match, try again.\n")
@@ -82,15 +81,17 @@ def main():
     print("✅  Shopify token saved.\n")
 
     # ── Test Shopify token ────────────────────────────────────────────────
-    print("Test Shopify Admin API token:")
-    print("  (starts with shpat_...)")
-    store.set("test_shopify_token", getpass.getpass("  Token: "))
-    print("✅  Test Shopify token saved.\n")
+    print("Test Shopify Admin API token (optional, press Enter to skip):")
+    token: str = getpass.getpass("  Token: ")
+    if token.strip():
+        store.set("test_shopify_token", token)
+        print("✅  Test Shopify token saved.\n")
+    else:
+        print("⏭️  Test Shopify token skipped.\n")
 
     print("=" * 50)
     print(f"  Setup complete. You can now launch {APP_NAME}.")
     print("=" * 50 + "\n")
-
 
 if __name__ == "__main__":
     main()

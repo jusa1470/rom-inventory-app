@@ -13,12 +13,11 @@ from credentials import CredentialStore, CredentialError
 
 from shopify.shopify_service import ShopifySyncService
 from webami.webami_service import WebamiSyncService
-from sync.services.pricing import PriceSyncService
-from sync.services.gap_fill import GapFillService
+from sync.bridge import BridgeService
 
 from shopify.client import ShopifyClient
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _creds = CredentialStore()
@@ -27,8 +26,7 @@ _creds = CredentialStore()
 
 _webami = WebamiSyncService()
 _shopify = ShopifySyncService()
-_price_sync = PriceSyncService()
-_gap_fill = GapFillService()
+_bridge = BridgeService()
 
 _shopify_client = ShopifyClient()
 
@@ -52,6 +50,9 @@ class GapFillRequest(BaseModel):
 class CreateProductRequest(BaseModel):
     products: list[dict]
 
+class AliasRequest(BaseModel):
+    alias_upc: str
+    canonical_upc: str
 
 # ── AUTH ─────────────────────────────────────────────────────────────
 
@@ -63,12 +64,11 @@ async def verify_password(body: AuthRequest):
     except CredentialError:
         raise HTTPException(status_code=401, detail="Incorrect password")
 
-
 @router.get("/auth")
 def auth(shop: str):
-    state = secrets.token_urlsafe(16)
+    state: str = secrets.token_urlsafe(16)
 
-    install_url = (
+    install_url: str = (
         f"https://{shop}/admin/oauth/authorize"
         f"?client_id=change_me"
         f"&scope=write_inventory,read_inventory,read_products,write_products"
@@ -78,12 +78,11 @@ def auth(shop: str):
 
     return RedirectResponse(install_url)
 
-
 @router.get("/auth/callback")
 def callback(shop: str, code: str):
-    token_url = f"https://{shop}/admin/oauth/access_token"
+    token_url: str = f"https://{shop}/admin/oauth/access_token"
 
-    resp = requests.post(token_url, json={
+    resp: requests.Response = requests.post(token_url, json={
         "client_id": "change_me",
         "client_secret": "change_me",
         "code": code,
@@ -92,25 +91,34 @@ def callback(shop: str, code: str):
     resp.raise_for_status()
     return {"status": "installed"}
 
-
 # ── WEBAMI SYNC ─────────────────────────────────────────────────────
 
 @router.post("/sync/webami/orders/full")
 async def webami_orders_full():
-    return await run_in_threadpool(_webami.run_full)
+    return await run_in_threadpool(_webami.sync_orders_full)
 
 @router.post("/sync/webami/orders/incremental")
 async def webami_orders_incremental():
-    return await run_in_threadpool(_webami.run_incremental)
+    return await run_in_threadpool(_webami.sync_orders_incremental)
 
 @router.post("/sync/webami/products/full")
 async def webami_products_full():
-    return await run_in_threadpool(_webami.run_products_full)
+    return await run_in_threadpool(_webami.sync_products_full)
+
+@router.patch("/webami/orders/{guid}/items/{item_id}")
+async def update_order_item(guid: str, item_id: int, body: dict):
+    qty: int = body.get("quantity_received", 0)
+    db.mark_item_received(item_id, qty)
+    return {"ok": True}
 
 @router.post("/sync/webami/prices")
-async def webami_prices(body: PriceSyncRequest):
-    return await run_in_threadpool(_price_sync.run_full)
+async def webami_prices():
+    return await run_in_threadpool(_webami.sync_prices)
 
+@router.post("/webami/products/alias")
+async def create_alias(body: AliasRequest):
+    db.upsert_product_alias(body.alias_upc, body.canonical_upc)
+    return {"ok": True}
 
 # ── SHOPIFY SYNC ────────────────────────────────────────────────────
 
@@ -122,27 +130,25 @@ async def shopify_full():
 async def shopify_incremental():
     return await run_in_threadpool(_shopify.run_incremental)
 
-
-# ── GAP FILL + PRICE SYNC (NO MORE BRIDGE LAYER) ────────────────────
+# ── GAP FILL + PRICE SYNC ───────────────────────────────────────────
 
 @router.post("/sync/prices")
 async def sync_prices():
-    return await run_in_threadpool(_price_sync.run_full)
-
+    return await run_in_threadpool(_bridge.push_prices)
 
 @router.post("/sync/gap-fill")
 async def gap_fill(body: GapFillRequest):
-    return await run_in_threadpool(_gap_fill.run_full)
+    ids: list[str] | None = body.product_ids or None
+    return await run_in_threadpool(lambda: _bridge.fill_gaps(ids))
 
-
-# ── CRUD (unchanged but CLEANED) ────────────────────────────────────
+# ── CRUD ────────────────────────────────────────────────────────────
 
 @router.post("/shopify/products")
 async def create_products(body: CreateProductRequest):
     results = []
     for product in body.products:
         try:
-            new_id = await run_in_threadpool(
+            new_id: str = await run_in_threadpool(
                 _shopify_client.create_product, product
             )
             results.append({"id": new_id, "status": "created"})
@@ -150,50 +156,60 @@ async def create_products(body: CreateProductRequest):
             results.append({"input": product, "status": "error", "detail": str(e)})
     return results
 
-
 @router.put("/shopify/products/{product_id}")
 async def update_product(product_id: str, body: dict):
     body["id"] = product_id
     return await run_in_threadpool(_shopify_client.update_product, body)
 
-
 @router.delete("/shopify/products/{product_id}")
 async def delete_product(product_id: str):
-    deleted = await run_in_threadpool(
+    deleted: str = await run_in_threadpool(
         _shopify_client.delete_product, product_id
     )
     db.delete_shopify_product_local(product_id)
     return {"deleted": deleted}
 
-
 # ── SEARCH ──────────────────────────────────────────────────────────
 
+@router.get("/webami/orders")
+async def search_webami_orders(q: str = ""):
+    return db.search_webami_orders(q)
+
+@router.get("/webami/orders/count")
+async def count_webami_orders():
+    return db.count_webami_orders()
+
 @router.get("/webami/products")
-async def search_webami(q: str = ""):
+async def search_webami_products(q: str = ""):
     return db.search_webami_products(q)
 
+@router.get("/webami/products/count")
+async def count_webami_products():
+    return db.count_webami_products()
 
 @router.get("/shopify/products")
-async def search_shopify(q: str = ""):
+async def search_shopify_products(q: str = ""):
     return db.search_shopify_products(q)
 
+@router.get("/shopify/products/count")
+async def count_shopify_products():
+    return db.count_shopify_products()
 
 # ── SYNC STATUS ─────────────────────────────────────────────────────
 
 @router.get("/sync/status")
 async def sync_status():
-    keys = [
+    keys: list[str] = [
         "webami_orders",
         "webami_products",
-        "webami_prices",
         "shopify_products",
+        "webami_prices",
     ]
 
     return {
         key: db.get_sync_state(key)
         for key in keys
     }
-
 
 # ── CANCEL SYSTEM (UNCHANGED) ───────────────────────────────────────
 
@@ -203,7 +219,6 @@ async def cancel_sync():
     cancel.request_cancel()
     return {"cancelled": True}
 
-
 @router.get("/sync/running")
 async def sync_running():
     import sync.cancel as cancel
@@ -211,7 +226,6 @@ async def sync_running():
         "running": cancel.running_label() or None,
         "last_result": cancel.last_result(),
     }
-
 
 @router.post("/sync/ack-result")
 async def ack_result():

@@ -1,79 +1,92 @@
-# """
-# Background job scheduler.
-# Runs price sync and gap filling on a configurable interval.
-# """
+"""
+Background job scheduler.
+Checks every 3 hours, runs if the configured interval has elapsed.
+"""
 
-# import logging
+import logging
+from datetime import datetime, timedelta, timezone
 
-# from apscheduler.schedulers.background import BackgroundScheduler
-# from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
-# import config as config
-# from sync.bridge import GapFiller, PriceBridge
-# from webami.webami_sync import WebamiSyncOrchestrator
+import config
+import db.database as db
+import sync.cancel as cancel
+from sync.bridge import BridgeService
+from webami.webami_service import WebamiSyncService
+from shopify.shopify_service import ShopifySyncService
 
-# logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
-# _scheduler = BackgroundScheduler()
-# _webami = WebamiSyncOrchestrator()
-# _price_bridge = PriceBridge()
-# _gap_filler = GapFiller()
+_scheduler = BackgroundScheduler()
+_bridge = BridgeService()
+_webami = WebamiSyncService()
+_shopify = ShopifySyncService()
 
+INTERVAL_TRIGGER = 3
 
-# def _job_price_sync():
-#     logger.info("Scheduled: price sync starting")
-#     _webami.sync_prices()
-#     _price_bridge.sync_prices_to_shopify()
+def _hours_since_last_sync(state_key: str) -> float | None:
+    state: db.SyncStateDTO | None = db.get_sync_state(state_key)
+    if not state or not state.last_sync:
+        return None
+    last: datetime = state.last_sync
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    delta: timedelta = datetime.now(timezone.utc) - last
+    return delta.total_seconds() / 3600
 
+def _safe_run(fn, state_key: str, interval_hours: int):
+    def wrapper():
+        if cancel.running_label():
+            logger.info(f"Skipping scheduled {fn.__name__} — sync already running")
+            return
 
-# def _job_gap_fill():
-#     logger.info("Scheduled: gap fill starting")
-#     _gap_filler.fill_missing_fields()
+        hours_since: float | None = _hours_since_last_sync(state_key)
 
+        if hours_since is not None and hours_since < interval_hours:
+            logger.info(
+                f"Skipping scheduled {fn.__name__} — "
+                f"last sync {hours_since:.1f}h ago, interval is {interval_hours}h"
+            )
+            return
 
-# def start():
-#     _scheduler.add_job(
-#         func=_job_price_sync,
-#         trigger=IntervalTrigger(hours=config.WEBAMI_PRICE_SYNC_INTERVAL_HOURS),
-#         id="price_sync",
-#         replace_existing=True,
-#         max_instances=1,
-#     )
-#     _scheduler.add_job(
-#         func=_job_gap_fill,
-#         trigger=IntervalTrigger(hours=24),
-#         id="gap_fill",
-#         replace_existing=True,
-#         max_instances=1,
-#     )
-#     _scheduler.start()
-#     logger.info("Scheduler started")
+        logger.info(
+            f"Running scheduled {fn.__name__} — "
+            + ("never synced" if hours_since is None else f"last sync {hours_since:.1f}h ago")
+        )
 
+        try:
+            fn()
+        except Exception:
+            logger.exception(f"Scheduled job {fn.__name__} failed")
 
-# def stop():
-#     _scheduler.shutdown(wait=False)
-#     logger.info("Scheduler stopped")
+    return wrapper
 
+def start() -> None:
+    _scheduler.add_job(
+        func=_safe_run(_webami.sync_orders_incremental, "webami_orders", config.WEBAMI_ORDER_SYNC_INTERVAL_HOURS),
+        trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
+        id="webami_orders",
+        replace_existing=True,
+        max_instances=1,
+    )
+    # _scheduler.add_job(
+    #     func=_safe_run(_bridge.push_prices, "webami_prices", config.WEBAMI_PRICE_SYNC_INTERVAL_HOURS),
+    #     trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
+    #     id="price_sync",
+    #     replace_existing=True,
+    #     max_instances=1,
+    # )
+    _scheduler.add_job(
+        func=_safe_run(_shopify.run_incremental, "shopify_products", config.SHOPIFY_SYNC_INTERVAL_HOURS),
+        trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
+        id="shopify_products",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _scheduler.start()
+    logger.info("Scheduler started")
 
-# def trigger_price_sync_now():
-#     """Manually fire a price sync outside the schedule."""
-#     _scheduler.add_job(
-#         func=_job_price_sync,
-#         id="price_sync_manual",
-#         replace_existing=True,
-#     )
-
-
-from sync.services.pricing import PriceSyncService
-from sync.services.gap_fill import GapFillService
-
-_price = PriceSyncService()
-_gap_fill = GapFillService()
-
-
-def _job_price_sync():
-    _price.run()
-
-
-def _job_gap_fill():
-    _gap_fill.run()
+def stop() -> None:
+    _scheduler.shutdown(wait=False)
+    logger.info("Scheduler stopped")
