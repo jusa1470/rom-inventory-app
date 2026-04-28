@@ -10,14 +10,12 @@ import config
 import db.database as db
 import sync.cancel as cancel
 from shopify.client import ShopifyClient
-from objects.dtos import WebamiProductDTO, ShopifyProductDTO
+from objects.dtos import WebamiProductDTO, ShopifyProductDTO, ShopifyVariantDTO
 
-logger = logging.getLogger(__name__)
-
+logger: logging.Logger = logging.getLogger(__name__)
 
 def _calculate_price(cost: float) -> float:
     return round(cost / (1 - config.MARGIN), 2)
-
 
 class BridgeService:
     def __init__(self):
@@ -29,7 +27,7 @@ class BridgeService:
         cancel.reset()
         cancel.set_running("Price bridge")
         try:
-            targets = self._get_webami_targets(upcs)
+            targets: list[WebamiProductDTO] = self._get_webami_targets(upcs)
             updated = 0
             skipped = 0
 
@@ -41,13 +39,13 @@ class BridgeService:
                     skipped += 1
                     continue
 
-                sp = self._find_shopify_product(wp.upc)
+                sp: ShopifyProductDTO | None = self._find_shopify_product(wp.upc)
                 if not sp:
                     skipped += 1
                     continue
 
-                new_price = _calculate_price(wp.cost)
-                current_price = self._get_current_price(sp)
+                new_price: float = _calculate_price(wp.cost)
+                current_price: float | None = self._get_current_price(sp)
 
                 if current_price == new_price:
                     skipped += 1
@@ -60,7 +58,7 @@ class BridgeService:
                 except Exception:
                     logger.exception(f"Price push failed for {wp.upc}")
 
-            result = {"updated": updated, "skipped": skipped}
+            result: dict[str, int] = {"updated": updated, "skipped": skipped}
             cancel.set_result("completed", "Price bridge", counts=result)
             return result
 
@@ -78,7 +76,7 @@ class BridgeService:
         cancel.reset()
         cancel.set_running("Gap fill")
         try:
-            targets = self._get_shopify_targets(product_ids)
+            targets: list[ShopifyProductDTO] = self._get_shopify_targets(product_ids)
             filled = 0
             skipped = 0
 
@@ -90,7 +88,7 @@ class BridgeService:
                     skipped += 1
                     continue
 
-                wp_list = db.search_webami_products(sp.upc)
+                wp_list: list[WebamiProductDTO] = db.search_webami_products(sp.upc)
                 if not wp_list:
                     skipped += 1
                     continue
@@ -107,7 +105,7 @@ class BridgeService:
                 except Exception:
                     logger.exception(f"Gap fill failed for {sp.product_id}")
 
-            result = {"filled": filled, "skipped": skipped}
+            result: dict[str, int] = {"filled": filled, "skipped": skipped}
             cancel.set_result("completed", "Gap fill", counts=result)
             return result
 
@@ -122,11 +120,11 @@ class BridgeService:
     # ── Shared helpers ────────────────────────────────────────────────
 
     def _find_shopify_product(self, upc: str) -> Optional[ShopifyProductDTO]:
-        results = db.search_shopify_products(upc)
+        results: list[ShopifyProductDTO] = db.search_shopify_products(upc)
         return results[0] if results else None
 
     def _get_current_price(self, sp: ShopifyProductDTO) -> Optional[float]:
-        variants = db.get_shopify_variants(sp.product_id)
+        variants: list[ShopifyVariantDTO] = db.get_shopify_variants(sp.product_id)
         if not variants:
             return None
         try:
@@ -136,18 +134,23 @@ class BridgeService:
 
     # ── Price helpers ─────────────────────────────────────────────────
 
+    def _find_webami_product(self, upc: str) -> Optional[WebamiProductDTO]:
+        resolved = db.resolve_upc(upc)
+        results = db.search_webami_products(resolved)
+        return results[0] if results else None
+
     def _get_webami_targets(self, upcs: Optional[list[str]]) -> list[WebamiProductDTO]:
         if upcs:
             results = []
             for u in upcs:
-                rows = db.search_webami_products(u)
+                rows: list[WebamiProductDTO] = db.search_webami_products(u)
                 if rows:
                     results.append(rows[0])
             return results
         return db.search_webami_products_with_cost()
 
     def _push_price(self, sp: ShopifyProductDTO, new_price: float) -> None:
-        variants = db.get_shopify_variants(sp.product_id)
+        variants: list[ShopifyVariantDTO] = db.get_shopify_variants(sp.product_id)
         self.client.update_product({
             "id": sp.product_id,
             "variants": [{"id": v.variant_id, "price": str(new_price)} for v in variants],
@@ -164,12 +167,12 @@ class BridgeService:
         updates = {}
 
         if not sp.image_urls:
-            images = wp.image_urls or []
+            images: list[str] = wp.image_urls or []
             if images:
                 updates["images"] = [{"src": images[0]}]
 
         if not sp.tags:
-            format = config.FORMAT_NAMES.get(wp.format or "")
+            format: str | None = config.FORMAT_NAMES.get(wp.format or "")
             if format:
                 updates["tags"] = f"New,{format}"
 

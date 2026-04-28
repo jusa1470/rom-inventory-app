@@ -23,7 +23,6 @@ Run **RecordSync-Setup** again and choose to overwrite when prompted.
   other apps.
 - The app will not work without running setup first.
 
-
 # Running & Packaging RecordSync
 
 ## Running locally for development

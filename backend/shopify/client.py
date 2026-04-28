@@ -5,18 +5,17 @@ Handles auth, pagination, rate limiting, retries, and response normalization.
 
 import logging
 import time
-from typing import Generator, Optional
+from typing import Generator, Literal, Optional
 
 import requests
 
 import config
 from credentials import CredentialStore
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 _creds = CredentialStore()
 
-PAGE_SIZE = config.SHOPIFY_PAGE_SIZE
-
+PAGE_SIZE: Literal[25] = config.SHOPIFY_PAGE_SIZE
 
 # ── GraphQL ───────────────────────────────────────────────────────────
 
@@ -92,6 +91,13 @@ mutation productDelete($input: ProductDeleteInput!) {
 }
 """
 
+TOTAL_PRODUCTS_COUNT_QUERY = """
+query {
+  productsCount {
+    count
+  }
+}
+"""
 
 # ── Client ────────────────────────────────────────────────────────────
 
@@ -105,7 +111,7 @@ class ShopifyClient:
     @property
     def token(self) -> str:
         if self._token is None:
-            key = "test_shopify_token" if config.IS_TEST_MODE else "shopify_token"
+            key: Literal['test_shopify_token'] | Literal['shopify_token'] = "test_shopify_token" if config.IS_TEST_MODE else "shopify_token"
             self._token = _creds.get(key)
         return self._token
 
@@ -135,7 +141,7 @@ class ShopifyClient:
             wait = 2 ** attempt
 
             try:
-                resp = requests.post(
+                resp: requests.Response = requests.post(
                     self.url,
                     json=payload,
                     headers=self.headers,
@@ -162,12 +168,53 @@ class ShopifyClient:
                 time.sleep(wait)
 
         raise RuntimeError("Shopify request failed after retries")
+    
+    def _count_request(self, retries: int = 3) -> dict:
+        for attempt in range(retries):
+            wait = 2 ** attempt
+
+            try:
+                resp: requests.Response = requests.post(
+                    self.url,
+                    headers=self.headers,
+                    timeout=30,
+                )
+
+                if resp.status_code == 429:
+                    logger.warning(f"Rate limited — retrying in {wait}s")
+                    time.sleep(wait)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+
+                if "errors" in data:
+                    raise RuntimeError(f"Product count errors: {data['errors']}")
+
+                return data
+
+            except requests.RequestException as e:
+                if attempt == retries - 1:
+                    raise
+                logger.warning(f"Request failed ({e}) — retrying in {wait}s")
+                time.sleep(wait)
+
+        raise RuntimeError("Shopify request failed after retries")
 
     # ── Read ──────────────────────────────────────────────────────────
 
+    def fetch_products_count(self) -> int:
+        data = self._request(
+            TOTAL_PRODUCTS_COUNT_QUERY
+        )
+        count = data["data"]["productsCount"]["count"]
+        if count and count >= 0:
+            return count
+        return -1
+
     def fetch_all_products(self, since: Optional[str] = None) -> Generator[dict, None, None]:
         cursor = None
-        query_filter = f'updated_at:>"{since}"' if since else None
+        query_filter: str | None = f'updated_at:>"{since}"' if since else None
 
         while True:
             data = self._request(
@@ -264,5 +311,5 @@ class ShopifyClient:
     @staticmethod
     def _raise_on_user_errors(errors: list[dict]) -> None:
         if errors:
-            msg = "; ".join(f"{e.get('field')}: {e.get('message')}" for e in errors)
+            msg: str = "; ".join(f"{e.get('field')}: {e.get('message')}" for e in errors)
             raise RuntimeError(f"Shopify userErrors: {msg}")

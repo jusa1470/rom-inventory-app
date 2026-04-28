@@ -12,7 +12,6 @@ const BASE = '/api';
 // ── State ──────────────────────────────────────────────────────────────────
 const SESSION_KEY = 'rs_authed';
 
-
 const App = {
   authed: sessionStorage.getItem(SESSION_KEY) === '1',
   page: sessionStorage.getItem(SESSION_KEY) === '1' ? 'dashboard' : 'lock',
@@ -69,6 +68,8 @@ const api = {
   ackResult:   ()   => api.post('/sync/ack-result'),
 
   // Webami
+  webamiOrdersCount: () => api.get(`/webami/orders/count`),
+  webamiProductsCount: () => api.get(`/webami/products/count`),
   webamiOrders:   (q='') => api.get(`/webami/orders?q=${encodeURIComponent(q)}`),
   webamiProducts: (q='') => api.get(`/webami/products?q=${encodeURIComponent(q)}`),
   syncWebamiOrdersFull:        (sig) => api._req('POST', '/sync/webami/orders/full',        undefined, sig),
@@ -77,6 +78,7 @@ const api = {
   syncWebamiPrices: (upcs, sig)      => api._req('POST', '/sync/webami/prices', { upcs: upcs || null }, sig),
 
   // Shopify
+  shopifyProductsCount: () => api.get(`/shopify/products/count`),
   shopifyProducts: (q='') => api.get(`/shopify/products?q=${encodeURIComponent(q)}`),
   syncShopifyFull:         (sig) => api._req('POST', '/sync/shopify/full',        undefined, sig),
   syncShopifyIncremental:  (sig) => api._req('POST', '/sync/shopify/incremental', undefined, sig),
@@ -442,9 +444,9 @@ function renderDashboard() {
     const oCount  = webamiO.status  === 'fulfilled' ? webamiO.value.length  : '?';
 
     statsRow.innerHTML = '';
+    statsRow.appendChild(statCard('Webami Orders', oCount, 'var(--orange)'));
     statsRow.appendChild(statCard('Webami Products', wCount, 'var(--blue)'));
     statsRow.appendChild(statCard('Shopify Products', sCount, 'var(--green)'));
-    statsRow.appendChild(statCard('Webami Orders', oCount, 'var(--orange)'));
   }
 
   function statCard(label, value, color) {
@@ -463,8 +465,8 @@ function renderDashboard() {
       const keys = {
         webami_orders:   { label: 'Webami Orders',   icon: '📦' },
         webami_products: { label: 'Webami Products',  icon: '🎵' },
-        webami_prices:   { label: 'Webami Prices',    icon: '💰' },
         shopify_products:{ label: 'Shopify Products', icon: '🛍️' },
+        webami_prices:   { label: 'Webami Prices',    icon: '💰' },
       };
 
       for (const [key, meta] of Object.entries(keys)) {
@@ -478,7 +480,7 @@ function renderDashboard() {
             ),
           ),
           h('div', { class: `badge ${s.last_sync ? 'badge-active' : 'badge-draft'}` },
-            s.last_sync ? 'Synced' : 'Pending'
+            s.last_sync ? 'Synced' : 'Not synced'
           ),
         );
         syncSection.appendChild(card);
@@ -523,7 +525,7 @@ function renderWebami() {
   // ── Products sub-view ──
   function renderWebamiProducts() {
     contentArea.innerHTML = '';
-    const searchInput = h('input', { class: 'input', placeholder: 'Search album, artist, UPC…', style: 'max-width:320px;' });
+    const searchInput = h('input', { class: 'input', placeholder: 'Search title, artist, brand, UPC…', style: 'max-width:320px;' });
     const tableWrap   = h('div', { class: 'table-wrap' });
     const toolbar     = h('div', { class: 'row center', style: 'margin-bottom:14px;gap:10px;' },
       searchInput,
@@ -557,8 +559,8 @@ function renderWebami() {
       h('tr', {},
         h('th', {}, ''),
         h('th', {}, 'UPC'),
-        h('th', {}, 'Album'),
-        h('th', {}, 'Artist'),
+        h('th', {}, 'Title'),
+        h('th', {}, 'Artist/Brand'),
         h('th', {}, 'Format'),
         h('th', {}, 'Cost'),
         h('th', {}, 'Last Scraped'),
@@ -573,8 +575,8 @@ function renderWebami() {
       tbody.appendChild(h('tr', {},
         h('td', {}, thumb),
         h('td', { class: 'mono', style: 'font-size:12px;color:var(--text-secondary)' }, r.upc || '—'),
-        h('td', {}, r.album || h('span', { style: 'color:var(--text-muted)' }, '—')),
-        h('td', {}, r.artist || h('span', { style: 'color:var(--text-muted)' }, '—')),
+        h('td', {}, r.title || h('span', { style: 'color:var(--text-muted)' }, '—')),
+        h('td', {}, r.artist || r.brand || h('span', { style: 'color:var(--text-muted)' }, '—')),
         h('td', {}, r.format ? badge(r.format, 'badge-new') : '—'),
         h('td', { style: 'color:var(--green);font-weight:600;' }, formatPrice(r.cost)),
         h('td', { style: 'color:var(--text-muted);font-size:12px;' }, format(r.last_scraped)),
@@ -998,7 +1000,7 @@ function renderSyncPage() {
   const wpFullBtn = makeBtn('Full sync', 'btn-primary', () => runSync('Webami products (full)', api.syncWebamiProductsFull, wpFullBtn));
   wrap.appendChild(syncCard({
     title:   'Products',
-    fullDesc:'Re-scrapes every known product page to refresh album, artist, image, weight, and format. Slow — one HTTP request per product. Only needed if product metadata has changed on Webami.',
+    fullDesc:'Re-scrapes every known product page to refresh title, artist/brand, image, weight, and format. Slow — one HTTP request per product. Only needed if product metadata has changed on Webami.',
     singleBtn: wpFullBtn,
   }));
 

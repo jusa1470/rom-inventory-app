@@ -29,7 +29,6 @@ import keyring
 from keyring.errors import PasswordDeleteError
 from config import APP_NAME
 
-
 # Keys stored in the keychain under APP_NAME as the service name
 _KEYS = {
     "webami_username",
@@ -39,10 +38,8 @@ _KEYS = {
     "app_password_hash",
 }
 
-
 class CredentialError(Exception):
     pass
-
 
 class CredentialStore:
     def __init__(self, service: str = APP_NAME):
@@ -56,7 +53,7 @@ class CredentialStore:
         """Retrieve a credential. Raises CredentialError if not found."""
         if key not in _KEYS:
             raise CredentialError(f"Unknown credential key: {key!r}")
-        value = keyring.get_password(self.service, key)
+        value: str | None = keyring.get_password(self.service, key)
         if value is None:
             raise CredentialError(
                 f"Credential {key!r} not set. Run the setup wizard first."
@@ -77,11 +74,7 @@ class CredentialStore:
             pass
 
     def is_set(self, key: str) -> bool:
-        try:
-            keyring.get_password(self.service, key)
-            return True
-        except Exception:
-            return False
+        return keyring.get_password(self.service, key) is not None
 
     # ------------------------------------------------------------------
     # App master password
@@ -89,12 +82,12 @@ class CredentialStore:
 
     def set_app_password(self, password: str) -> None:
         """Hash and store the app master password."""
-        hashed = self._hash(password)
+        hashed: str = self._hash(password)
         keyring.set_password(self.service, "app_password_hash", hashed)
 
     def verify_app_password(self, password: str) -> bool:
         """Return True if password matches stored hash, else raise."""
-        stored = keyring.get_password(self.service, "app_password_hash")
+        stored: str | None = keyring.get_password(self.service, "app_password_hash")
         if stored is None:
             raise CredentialError("App password not configured.")
         if self._hash(password) != stored:
@@ -110,9 +103,7 @@ class CredentialStore:
         return keyring.get_password(self.service, "app_password_hash") is None
 
     def reset_all(self) -> None:
-        """Wipe all stored credentials. User will need to re-run setup."""
-        all_keys = _KEYS | {"app_password_hash"}
-        for key in all_keys:
+        for key in _KEYS:
             self.delete(key)
 
     # ------------------------------------------------------------------
@@ -121,5 +112,5 @@ class CredentialStore:
 
     @staticmethod
     def _hash(value: str) -> str:
-        salt = APP_NAME.encode()
+        salt: bytes = APP_NAME.encode()
         return hashlib.sha256(salt + value.encode()).hexdigest()

@@ -12,16 +12,16 @@ an accurate, complete picture regardless of whether it was watching
 when the sync started or finished.
 """
 
+from _thread import lock
 import threading
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
 _event = threading.Event()
-_lock = threading.Lock()
+_lock: lock = threading.Lock()
 
 _running_label: str = ""
 _last_result: Optional[dict] = None
-
 
 # ── Cancellation ──────────────────────────────────────────────────────
 
@@ -33,7 +33,6 @@ def reset() -> None:
 
 def cancelled() -> bool:
     return _event.is_set()
-
 
 # ── Running label ─────────────────────────────────────────────────────
 
@@ -51,7 +50,6 @@ def clear_running() -> None:
 def running_label() -> str:
     with _lock:
         return _running_label
-
 
 # ── Last result ───────────────────────────────────────────────────────
 

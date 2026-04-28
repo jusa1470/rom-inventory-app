@@ -5,14 +5,14 @@ Fetches products from Shopify and persists into local DB.
 
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 import db.database as db
 import sync.cancel as cancel
 from shopify.client import ShopifyClient
 from db.models import ShopifyProduct, ShopifyVariant
 
-logger = logging.getLogger(__name__)
-
+logger: logging.Logger = logging.getLogger(__name__)
 
 class ShopifySyncService:
     def __init__(self):
@@ -40,16 +40,20 @@ class ShopifySyncService:
     # ── Core sync ─────────────────────────────────────────────────────
 
     def _run_sync(self, full: bool) -> dict:
-        label = "Shopify full sync" if full else "Shopify incremental sync"
+        label: Literal['Shopify full sync'] | Literal['Shopify incremental sync'] = "Shopify full sync" if full else "Shopify incremental sync"
         cancel.reset()
         cancel.set_running(label)
 
         try:
-            since = None
+            since: str = ""
             if not full:
-                state = db.get_sync_state("shopify_products")
+                state: db.SyncStateDTO | None = db.get_sync_state("shopify_products")
                 if state and state.last_sync:
-                    since = state.last_sync.strftime("%Y-%m-%dT%H:%M:%S%z")
+                    since: str = state.last_sync.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+            total: int = self.client.fetch_products_count()
+            if total >= 0:
+                logger.info(f"Processing {total} products from Shopify")
 
             processed = 0
 
@@ -62,12 +66,12 @@ class ShopifySyncService:
                 self._upsert_variants(product)
                 processed += 1
 
-                if processed % 50 == 0:
-                    logger.info(f"{label}: processed {processed}")
+                if processed % 100 == 0:
+                    logger.info(f"{label}: processed {processed}/{total}")
 
             db.set_sync_state("shopify_products", datetime.now(timezone.utc))
 
-            result = {"processed": processed}
+            result: dict[str, int] = {"processed": processed}
             cancel.set_result("completed", label, counts=result)
             logger.info(f"{label} complete: {processed} products")
             return result

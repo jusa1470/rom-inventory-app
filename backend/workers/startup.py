@@ -14,9 +14,8 @@ logger = logging.getLogger(__name__)
 _webami = WebamiSyncService()
 _shopify = ShopifySyncService()
 
-
 def run_startup_sync() -> None:
-    is_first_run_webami = db.get_sync_state("webami_orders") is None
+    is_first_run_webami: bool = db.get_sync_state("webami_orders") is None
     if is_first_run_webami:
         logger.info("First run — Webami full sync")
         _webami.sync_orders_full()
@@ -24,7 +23,7 @@ def run_startup_sync() -> None:
         logger.info("Subsequent run — Webami incremental sync")
         _webami.sync_orders_incremental()
 
-    is_first_run_shopify = db.get_sync_state("shopify_products") is None
+    is_first_run_shopify: bool = db.get_sync_state("shopify_products") is None
     if is_first_run_shopify:
         logger.info("First run — Shopify full sync")
         _shopify.run_full()

@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-
 # ─────────────────────────────────────────────
 # Webami
 # ─────────────────────────────────────────────
@@ -15,32 +14,33 @@ class WebamiOrderDTO:
     order_date: Optional[datetime]
     number_of_products: int
     synced_at: Optional[datetime]
-    raw_upcs: Optional[str]
-
 
 @dataclass
 class WebamiOrderItemDTO:
     id: int
     order_guid: str
     upc: str
+    title: Optional[str]
+    format: Optional[str]
+    cost: Optional[float]
     quantity_ordered: int
     quantity_received: int
     received_at: Optional[datetime]
 
-
 @dataclass
 class WebamiProductDTO:
     upc: str
-    album: Optional[str]
+    title: str
     artist: Optional[str]
+    brand: Optional[str]
     image_urls: Optional[list[str]]
     features: Optional[list[str]]
+    genres: Optional[list[str]]
     weight_grams: Optional[float]
     cost: Optional[float]
     format: Optional[str]
     last_scraped: Optional[datetime]
     price_synced_at: Optional[datetime]
-
 
 # ─────────────────────────────────────────────
 # Shopify
@@ -59,7 +59,6 @@ class ShopifyVariantDTO:
     updated_at: Optional[datetime]
     last_synced: Optional[datetime]
 
-
 @dataclass
 class ShopifyProductDTO:
     product_id: str
@@ -73,7 +72,6 @@ class ShopifyProductDTO:
     music_genres: Optional[list[str]]
     updated_at: Optional[datetime]
     last_synced: Optional[datetime]
-
 
 # ─────────────────────────────────────────────
 # Sync
