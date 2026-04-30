@@ -41,10 +41,10 @@ class WebamiSyncService:
         finally:
             cancel.clear_running()
 
-    def sync_orders_incremental(self) -> dict:
+    def sync_orders_recent(self) -> dict:
         cancel.reset()
-        cancel.set_running("Webami orders — incremental")
-        logger.info("Webami: incremental order sync starting")
+        cancel.set_running("Webami orders — recent")
+        logger.info("Webami: recent order sync starting")
         try:
             known: set[str] = db.get_all_order_guids()
             recent_orders: list[WebamiOrder] = order_fetcher.get_recent_orders()
@@ -53,13 +53,13 @@ class WebamiSyncService:
             result = self._process_orders(new_orders)
             cancel.set_result(
                 "cancelled" if result["cancelled"] else "completed",
-                "Webami orders — incremental",
+                "Webami orders — recent",
                 counts=result,
             )
             return result
         except Exception as e:
-            cancel.set_result("failed", "Webami orders — incremental", detail=str(e))
-            logger.error(f"Webami orders incremental sync failed: {e}")
+            cancel.set_result("failed", "Webami orders — recent", detail=str(e))
+            logger.error(f"Webami orders recent sync failed: {e}")
             raise
         finally:
             cancel.clear_running()
@@ -220,7 +220,7 @@ class WebamiSyncService:
                 if cancel.cancelled():
                     logger.info(f"Webami prices: cancelled after {updated} updates")
                     break
-                cost: float | None = scraper.get_cost_via_api(upc)
+                cost: float | None = scraper.get_cost(upc)
                 if cost is not None:
                     db.update_product_cost(upc, cost)
                     updated += 1

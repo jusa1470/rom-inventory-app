@@ -5,3 +5,4 @@ temp*
 json.json
 *.db
 *.env
+node_modules/

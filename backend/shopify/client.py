@@ -92,8 +92,8 @@ mutation productDelete($input: ProductDeleteInput!) {
 """
 
 TOTAL_PRODUCTS_COUNT_QUERY = """
-query {
-  productsCount {
+query($query: String) {
+  productsCount(query: $query) {
     count
   }
 }
@@ -203,9 +203,13 @@ class ShopifyClient:
 
     # ── Read ──────────────────────────────────────────────────────────
 
-    def fetch_products_count(self) -> int:
+    def fetch_products_count(self, since: Optional[str] = None) -> int:
+        query_filter: str | None = f'updated_at:>"{since}"' if since else None
         data = self._request(
-            TOTAL_PRODUCTS_COUNT_QUERY
+            TOTAL_PRODUCTS_COUNT_QUERY,
+            {
+                "query": query_filter
+            }
         )
         count = data["data"]["productsCount"]["count"]
         if count and count >= 0:

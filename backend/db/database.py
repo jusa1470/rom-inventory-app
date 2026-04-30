@@ -28,6 +28,7 @@ from db.models import (
 from objects.dtos import (
     ShopifyProductDTO,
     ShopifyVariantDTO,
+    ShopifyProductVariantDTO,
     SyncStateDTO,
     WebamiOrderDTO,
     WebamiOrderItemDTO,
@@ -133,6 +134,11 @@ def _map_shopify_variant(v: ShopifyVariant) -> ShopifyVariantDTO:
         weight_unit=v.weight_unit,
         updated_at=v.updated_at,
         last_synced=v.last_synced,
+    )
+
+def _map_shopify_product_variant(v: ShopifyVariant) -> ShopifyProductVariantDTO:
+    return ShopifyProductVariantDTO(
+        
     )
 
 def _map_sync_state(s: SyncState) -> SyncStateDTO:
@@ -361,7 +367,7 @@ def get_shopify_product(product_id: str) -> Optional[ShopifyProductDTO]:
         obj: ShopifyProduct | None = db.get(ShopifyProduct, product_id)
         return _map_shopify_product(obj) if obj else None
 
-def search_shopify_products(query: str) -> list[ShopifyProductDTO]:
+def search_shopify_products(query: str) -> list[ShopifyProductVariantDTO]:
     with get_db() as db:
         q: str = f"%{query}%"
         rows: List[ShopifyProduct] = (
@@ -376,6 +382,9 @@ def search_shopify_products(query: str) -> list[ShopifyProductDTO]:
             .all()
         )
         return [_map_shopify_product(r) for r in rows]
+    
+def search_shopify_variant_products(query: str) -> list[ShopifyProductVariantDTO]:
+    return []
     
 def count_shopify_products() -> int:
     with get_db() as db:

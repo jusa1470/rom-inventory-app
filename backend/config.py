@@ -11,7 +11,7 @@ WEBAMI_SCRAPE_WORKERS = 12          # concurrent product scrape threads
 WEBAMI_ORDER_WORKERS = 4
 WEBAMI_PRICE_SYNC_INTERVAL_HOURS = 168
 WEBAMI_ORDER_SYNC_INTERVAL_HOURS = 24
-WEBAMI_ORDERS_INCREMENTAL_PAGES = 2  # pages to check on incremental order sync
+WEBAMI_ORDERS_INCREMENTAL_PAGES = 2  # pages to check on recent order sync
 
 # --- Shopify ---
 SHOPIFY_SHOP = "gtsiqj-1p.myshopify.com"

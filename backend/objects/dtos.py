@@ -73,6 +73,18 @@ class ShopifyProductDTO:
     updated_at: Optional[datetime]
     last_synced: Optional[datetime]
 
+@dataclass
+class ShopifyProductVariantDTO:
+    product_id: str
+    variant_id: str
+    title: str
+    vendor: str
+    status: str
+    upc: Optional[str]
+    price: float
+    inventory_quantity: int
+    updated_at: Optional[datetime]
+
 # ─────────────────────────────────────────────
 # Sync
 # ─────────────────────────────────────────────

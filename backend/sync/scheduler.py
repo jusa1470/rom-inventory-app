@@ -64,7 +64,7 @@ def _safe_run(fn, state_key: str, interval_hours: int):
 
 def start() -> None:
     _scheduler.add_job(
-        func=_safe_run(_webami.sync_orders_incremental, "webami_orders", config.WEBAMI_ORDER_SYNC_INTERVAL_HOURS),
+        func=_safe_run(_webami.sync_orders_recent, "webami_orders", config.WEBAMI_ORDER_SYNC_INTERVAL_HOURS),
         trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
         id="webami_orders",
         replace_existing=True,
@@ -78,7 +78,7 @@ def start() -> None:
     #     max_instances=1,
     # )
     _scheduler.add_job(
-        func=_safe_run(_shopify.run_incremental, "shopify_products", config.SHOPIFY_SYNC_INTERVAL_HOURS),
+        func=_safe_run(_shopify.run_recent, "shopify_products", config.SHOPIFY_SYNC_INTERVAL_HOURS),
         trigger=IntervalTrigger(hours=INTERVAL_TRIGGER),
         id="shopify_products",
         replace_existing=True,

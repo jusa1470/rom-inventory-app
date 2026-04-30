@@ -14,6 +14,7 @@ from _thread import _local
 import logging
 import threading
 import requests
+from bs4 import BeautifulSoup, Tag
 
 import config
 from credentials import CredentialStore
@@ -46,6 +47,15 @@ def _build_session() -> requests.Session:
 def _login(session: requests.Session) -> None:
     tag: str = _worker_tag()
     logger.info(f"{tag} Logging in to Webami")
+
+    resp: requests.Response = session.get("https://webami.aent.com/webami/logon")
+    soup = BeautifulSoup(resp.text, "lxml")
+    token_input: Tag | None = soup.find("input", {"name": "__RequestVerificationToken"})
+    if not token_input:
+        raise RuntimeError("No __RequestVerificationToken input found on logon page")
+    header_token = str(token_input["value"])
+    logger.debug(f"Got header token: {header_token[:20]}...")
+
     response: requests.Response = session.post(
         f"{config.WEBAMI_BASE_URL}/api/authentication/authenticate",
         json={
@@ -53,6 +63,9 @@ def _login(session: requests.Session) -> None:
             "Password": _creds.get("webami_password"),
             "ConsumerMode": False,
         },
+        headers={
+            "__RequestVerificationToken": header_token
+        }
     )
     response.raise_for_status()
     data = response.json()
