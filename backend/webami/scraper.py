@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 ALLOWED_MUSIC_FORMATS: set[str] = {"lp", "12\" single", "7\" single", "cd", "cassette"}
 ALLOWED_ITEM_FORMATS: set[str] = {"headphones", "vinyl accessories", "bags / sleeves", "turntables", "apparel", "media player accessories", "speaker & components"}
 
-
 # ─────────────────────────────────────────────
 # Core helpers
 # ─────────────────────────────────────────────
@@ -38,10 +37,8 @@ def _get_json_ld(soup: BeautifulSoup) -> dict | None:
     except Exception:
         return None
 
-
 def _get_primaryinfo(soup: BeautifulSoup) -> Tag | None:
     return soup.find(id="product-primaryinfo")
-
 
 # ─────────────────────────────────────────────
 # Field extractors
@@ -58,7 +55,6 @@ def get_title(soup: BeautifulSoup, upc: str) -> Optional[str]:
     logger.warning(f"{_worker_tag()} UPC {upc}: title not found")
     return None
 
-
 def get_artist(soup: BeautifulSoup, upc: str) -> Optional[str]:
     el: Tag | None = soup.select_one(".aec-main-artist a")
     if el and el.text:
@@ -66,7 +62,6 @@ def get_artist(soup: BeautifulSoup, upc: str) -> Optional[str]:
 
     logger.debug(f"{_worker_tag()} UPC {upc}: artist not found")
     return None
-
 
 def get_images(soup: BeautifulSoup, upc: str) -> Optional[list[str]]:
     urls: list[str] = []
@@ -92,14 +87,12 @@ def get_images(soup: BeautifulSoup, upc: str) -> Optional[list[str]]:
     logger.debug(f"{_worker_tag()} UPC {upc}: no images found")
     return None
 
-
 def get_features(soup: BeautifulSoup) -> Optional[list[str]]:
     el: Tag | None = soup.select_one(".aec-main-desc")
     if el and el.text:
         text = el.text.strip().strip("()")
         return [f.strip() for f in text.split(",") if f.strip()]
     return None
-
 
 def get_format(soup: BeautifulSoup, upc: str) -> Optional[str]:
     el: Tag | None = soup.select_one(".aec-attr")
@@ -111,7 +104,6 @@ def get_format(soup: BeautifulSoup, upc: str) -> Optional[str]:
 
     logger.warning(f"{_worker_tag()} UPC {upc}: format not found")
     return None
-
 
 def get_weight(primary: Tag | None, upc: str) -> Optional[float]:
     if not primary:
@@ -125,7 +117,6 @@ def get_weight(primary: Tag | None, upc: str) -> Optional[float]:
 
     logger.debug(f"{_worker_tag()} UPC {upc}: weight not found")
     return None
-
 
 def _convert_weight_to_grams(raw: str) -> Optional[float]:
     try:
@@ -141,7 +132,6 @@ def _convert_weight_to_grams(raw: str) -> Optional[float]:
         return None
     return None
 
-
 def get_genres(primary: Tag | None) -> Optional[list[str]]:
     if not primary:
         return None
@@ -152,7 +142,6 @@ def get_genres(primary: Tag | None) -> Optional[list[str]]:
             return [a.text.strip() for a in li.find_all("a") if a.text.strip()]
 
     return None
-
 
 def get_brand(soup: BeautifulSoup, primary: Tag | None) -> Optional[str]:
     data = _get_json_ld(soup)
@@ -169,23 +158,7 @@ def get_brand(soup: BeautifulSoup, primary: Tag | None) -> Optional[str]:
 
     return None
 
-
-def get_cost(soup: BeautifulSoup, upc: str) -> Optional[float]:
-    try:
-        el: Tag | None = soup.select_one(".aec-new-price strong")
-        if el and el.text:
-            return float(el.text.strip())
-
-        listing: Tag | None = soup.select_one(".aec-listing-price")
-        if listing and listing.text:
-            return float(listing.text.strip())
-
-    except Exception:
-        logger.exception(f"{_worker_tag()} UPC {upc}: cost parse failed")
-
-    return None
-
-def get_cost_via_api(upc: str) -> Optional[float]:
+def get_cost(upc: str) -> Optional[float]:
     """
     Fetch cost via the fast /ajax/priceavail endpoint.
     Used for price-only syncs where a full page scrape is not needed.
@@ -207,7 +180,6 @@ def get_cost_via_api(upc: str) -> Optional[float]:
     except Exception:
         logger.exception(f"{_worker_tag()} UPC {upc}: failed to retrieve cost from API")
     return None
-
 
 # ─────────────────────────────────────────────
 # Main scraper
@@ -242,7 +214,7 @@ def scrape_product_page(upc: str) -> Optional[dict]:
         "title": get_title(soup, upc),
         "image_urls": get_images(soup, upc),
         "weight_grams": get_weight(primary, upc),
-        "cost": get_cost(soup, upc),
+        "cost": get_cost(upc),
         "format": format,
     }
 

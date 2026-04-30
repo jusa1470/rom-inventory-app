@@ -1,6 +1,6 @@
 """
 Startup bootstrap.
-Runs once on app open — full sync on first run, incremental after that.
+Runs once on app open — full sync on first run, recent after that.
 """
 
 import logging
@@ -20,13 +20,13 @@ def run_startup_sync() -> None:
         logger.info("First run — Webami full sync")
         _webami.sync_orders_full()
     else:
-        logger.info("Subsequent run — Webami incremental sync")
-        _webami.sync_orders_incremental()
+        logger.info("Subsequent run — Webami recent sync")
+        _webami.sync_orders_recent()
 
     is_first_run_shopify: bool = db.get_sync_state("shopify_products") is None
     if is_first_run_shopify:
         logger.info("First run — Shopify full sync")
         _shopify.run_full()
     else:
-        logger.info("Subsequent run — Shopify incremental sync")
-        _shopify.run_incremental()
+        logger.info("Subsequent run — Shopify recent sync")
+        _shopify.run_recent()

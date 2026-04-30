@@ -34,13 +34,13 @@ class ShopifySyncService:
     def run_full(self) -> dict:
         return self._run_sync(full=True)
 
-    def run_incremental(self) -> dict:
+    def run_recent(self) -> dict:
         return self._run_sync(full=False)
 
     # ── Core sync ─────────────────────────────────────────────────────
 
     def _run_sync(self, full: bool) -> dict:
-        label: Literal['Shopify full sync'] | Literal['Shopify incremental sync'] = "Shopify full sync" if full else "Shopify incremental sync"
+        label: Literal['Shopify full sync'] | Literal['Shopify recent sync'] = "Shopify full sync" if full else "Shopify recent sync"
         cancel.reset()
         cancel.set_running(label)
 
@@ -51,7 +51,7 @@ class ShopifySyncService:
                 if state and state.last_sync:
                     since: str = state.last_sync.strftime("%Y-%m-%dT%H:%M:%S%z")
 
-            total: int = self.client.fetch_products_count()
+            total: int = self.client.fetch_products_count(since=since)
             if total >= 0:
                 logger.info(f"Processing {total} products from Shopify")
 

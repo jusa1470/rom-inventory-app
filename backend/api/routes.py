@@ -70,7 +70,7 @@ def auth(shop: str):
 
     install_url: str = (
         f"https://{shop}/admin/oauth/authorize"
-        f"?client_id=change_me"
+        f"?client_id=changeme"
         f"&scope=write_inventory,read_inventory,read_products,write_products"
         f"&redirect_uri=http://localhost:8000/api/auth/callback"
         f"&state={state}"
@@ -83,12 +83,14 @@ def callback(shop: str, code: str):
     token_url: str = f"https://{shop}/admin/oauth/access_token"
 
     resp: requests.Response = requests.post(token_url, json={
-        "client_id": "change_me",
-        "client_secret": "change_me",
+        "client_id": "changeme",
+        "client_secret": "changeme",
         "code": code,
     })
 
     resp.raise_for_status()
+    data = resp.json()
+    print("Token: ", data["access_token"])
     return {"status": "installed"}
 
 # ── WEBAMI SYNC ─────────────────────────────────────────────────────
@@ -97,9 +99,9 @@ def callback(shop: str, code: str):
 async def webami_orders_full():
     return await run_in_threadpool(_webami.sync_orders_full)
 
-@router.post("/sync/webami/orders/incremental")
-async def webami_orders_incremental():
-    return await run_in_threadpool(_webami.sync_orders_incremental)
+@router.post("/sync/webami/orders/recent")
+async def webami_orders_recent():
+    return await run_in_threadpool(_webami.sync_orders_recent)
 
 @router.post("/sync/webami/products/full")
 async def webami_products_full():
@@ -126,9 +128,9 @@ async def create_alias(body: AliasRequest):
 async def shopify_full():
     return await run_in_threadpool(_shopify.run_full)
 
-@router.post("/sync/shopify/incremental")
-async def shopify_incremental():
-    return await run_in_threadpool(_shopify.run_incremental)
+@router.post("/sync/shopify/recent")
+async def shopify_recent():
+    return await run_in_threadpool(_shopify.run_recent)
 
 # ── GAP FILL + PRICE SYNC ───────────────────────────────────────────
 
