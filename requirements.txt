@@ -1,0 +1,7 @@
+flask==3.1.0
+flask-session==0.8.0
+bcrypt==4.2.1
+cryptography==44.0.0
+rapidfuzz==3.12.2
+requests==2.32.3
+beautifulsoup4==4.12.3
