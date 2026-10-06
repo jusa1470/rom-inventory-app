@@ -13,11 +13,7 @@ logger = logging.getLogger(__name__)
 _VARIANT_FIELDS = """
   id title sku barcode price position taxable inventoryQuantity
   selectedOptions { name value }
-  inventoryItem {
-    id
-    unitCost { amount }
-    measurement { weight { value unit } }
-  }
+  inventoryItem { id unitCost { amount } }
 """
 
 PRODUCTS_QUERY = """
@@ -28,7 +24,7 @@ query($cursor: String, $query: String, $first: Int!, $vfirst: Int!) {
       id handle title vendor status tags productType createdAt updatedAt
       category { id fullName }
       options { name position }
-      media(first: 3) { nodes { preview { image { url } } } }
+      media(first: 1) { nodes { preview { image { url } } } }
       upc: metafield(namespace: "facts", key: "upc") { value }
       variants(first: $vfirst) {
         pageInfo { hasNextPage endCursor }
@@ -62,6 +58,11 @@ class ShopifyClient:
             store += ".myshopify.com"
         self.url = f"https://{store}/admin/api/{api_version}/graphql.json"
         self.headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": token}
+        # Rate-limit bucket tracking (updated from every response)
+        self._available: Optional[float] = None
+        self._restore_rate: float = 50.0
+        self._last_cost: float = 0.0
+        self._seen_at: float = 0.0
 
     @classmethod
     def from_creds(cls, creds: dict) -> "ShopifyClient":
@@ -69,22 +70,52 @@ class ShopifyClient:
 
     # ── core ──────────────────────────────────────────────────────────
 
-    def _request(self, query: str, variables: Optional[dict] = None, retries: int = 5) -> dict:
+    def _record_cost(self, data: dict) -> Optional[float]:
+        """Track the cost bucket. Returns the wait (s) needed to afford the last query again."""
+        cost = (data.get("extensions") or {}).get("cost") or {}
+        ts = cost.get("throttleStatus") or {}
+        if "currentlyAvailable" in ts:
+            self._available = float(ts["currentlyAvailable"])
+            self._restore_rate = float(ts.get("restoreRate") or self._restore_rate)
+            self._seen_at = time.monotonic()
+        if cost.get("requestedQueryCost"):
+            self._last_cost = float(cost["requestedQueryCost"])
+        return self._wait_needed()
+
+    def _wait_needed(self) -> float:
+        """Seconds to wait until the bucket can cover the last query's requested cost."""
+        if self._available is None or not self._last_cost:
+            return 0.0
+        now_available = min(
+            self._available + (time.monotonic() - self._seen_at) * self._restore_rate,
+            1000.0,
+        )
+        deficit = self._last_cost * 1.1 - now_available   # 10% margin
+        return max(0.0, deficit / self._restore_rate)
+
+    def _request(self, query: str, variables: Optional[dict] = None, retries: int = 6) -> dict:
         payload = {"query": query, "variables": variables or {}}
         for attempt in range(retries):
             wait = 2 ** attempt
+            pre = self._wait_needed()
+            if pre > 0:
+                logger.info("Pacing: waiting %.1fs for rate-limit bucket", pre)
+                time.sleep(pre)
             try:
                 resp = requests.post(self.url, json=payload, headers=self.headers, timeout=60)
                 if resp.status_code == 429 or resp.status_code >= 500:
+                    wait = float(resp.headers.get("Retry-After", wait))
                     logger.warning("Shopify %s, retrying in %ss", resp.status_code, wait)
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
                 data = resp.json()
+                self._record_cost(data)
                 errors = data.get("errors")
                 if errors:
                     if any((e.get("extensions") or {}).get("code") == "THROTTLED" for e in errors):
-                        logger.warning("Throttled, retrying in %ss", wait)
+                        wait = max(self._wait_needed(), 1.0)
+                        logger.warning("Throttled, retrying in %.1fs", wait)
                         time.sleep(wait)
                         continue
                     raise RuntimeError(f"GraphQL errors: {errors}")
