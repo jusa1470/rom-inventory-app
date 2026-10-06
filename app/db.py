@@ -72,10 +72,23 @@ CREATE TABLE IF NOT EXISTS plan_variants (
   color             TEXT,
   attributes        TEXT,
   confidence        REAL,                   -- parser confidence, 0..1
-  status            TEXT DEFAULT 'draft',   -- draft | approved | applied | skipped
+  status            TEXT DEFAULT 'needs_review',  -- ready | needs_review | approved | applied
   new_variant_id    TEXT,                   -- set once created in Shopify
   notes             TEXT,
-  updated_at        TEXT DEFAULT (datetime('now'))
+  updated_at        TEXT DEFAULT (datetime('now')),
+  unknown_terms     TEXT,                   -- JSON list of terms with no rule yet
+  reason            TEXT,                   -- why it needs review
+  manual            INTEGER DEFAULT 0       -- user edited; rebuilds leave it alone
+);
+
+-- Classification rules the user has taught the app. Auto-classification only
+-- happens when every word of a title is explained by a rule.
+-- kind: edition | color | attribute | ignore | title | format | default
+CREATE TABLE IF NOT EXISTS term_rules (
+  term       TEXT PRIMARY KEY,   -- normalized phrase, or a ~pseudo term
+  kind       TEXT NOT NULL,
+  value      TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_pv_plan   ON plan_variants(plan_product_id);
 CREATE INDEX IF NOT EXISTS idx_pv_source ON plan_variants(source_product_id);
@@ -108,6 +121,11 @@ def init_db() -> None:
     with connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        # migrate plan_variants created by an earlier version of the schema
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(plan_variants)")}
+        for col, ddl in (("unknown_terms", "TEXT"), ("reason", "TEXT"), ("manual", "INTEGER DEFAULT 0")):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE plan_variants ADD COLUMN {col} {ddl}")
 
 
 def get_state(key: str) -> str | None:

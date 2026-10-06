@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from contextlib import asynccontextmanager
 
-from app import db, shopify_sync, vault
+from app import db, planner, shopify_sync, vault
 from app.shopify_client import ShopifyClient
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
@@ -117,6 +117,85 @@ def list_products(q: str = "", limit: int = 50, offset: int = 0):
             params,
         ).fetchall()
     return {"total": total, "rows": [dict(r) for r in rows]}
+
+
+# ── Catalog plan ────────────────────────────────────────────────────
+
+class RuleIn(BaseModel):
+    term: str
+    kind: str
+    value: str = ""
+
+
+class VariantEdit(BaseModel):
+    edition: str | None = None
+    color: str | None = None
+    attributes: str | None = None
+
+
+def _guard(fn, *a):
+    try:
+        return fn(*a)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except PermissionError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+_plan = [Depends(require_session)]
+
+
+@app.post("/api/plan/build", dependencies=_plan)
+def plan_build():
+    return planner.build_plan()
+
+
+@app.get("/api/plan/groups", dependencies=_plan)
+def plan_groups(filter: str = "all", q: str = "", limit: int = 25, offset: int = 0):
+    return planner.list_groups(filter, q, max(1, min(limit, 100)), max(0, offset))
+
+
+@app.get("/api/plan/unknown-terms", dependencies=_plan)
+def plan_unknown():
+    return planner.unknown_terms()
+
+
+@app.get("/api/plan/rules", dependencies=_plan)
+def plan_rules():
+    return planner.list_rules()
+
+
+@app.post("/api/plan/rules", dependencies=_plan)
+def plan_save_rules(rules: list[RuleIn]):
+    for r in rules:
+        _guard(planner.save_rule, r.term, r.kind, r.value)
+    return planner.build_plan()          # rules apply immediately to everything not yet approved/edited
+
+
+@app.delete("/api/plan/rules", dependencies=_plan)
+def plan_delete_rule(term: str):
+    planner.delete_rule(term)
+    return planner.build_plan()
+
+
+@app.patch("/api/plan/variants/{variant_id}", dependencies=_plan)
+def plan_edit_variant(variant_id: int, body: VariantEdit):
+    _guard(planner.edit_variant, variant_id, body.model_dump(exclude_unset=True))
+    return {"ok": True}
+
+
+@app.post("/api/plan/groups/{group_id}/approve", dependencies=_plan)
+def plan_approve(group_id: int):
+    _guard(planner.set_group_approved, group_id, True)
+    return {"ok": True}
+
+
+@app.post("/api/plan/groups/{group_id}/unapprove", dependencies=_plan)
+def plan_unapprove(group_id: int):
+    _guard(planner.set_group_approved, group_id, False)
+    return {"ok": True}
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

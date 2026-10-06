@@ -6,3 +6,6 @@ credentials.json
 data/
 vault.enc.bak
 .venv/
+.sessions/
+.secret_key
+shopify_token.py

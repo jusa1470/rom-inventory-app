@@ -22,3 +22,10 @@ td { padding: 8px; border-top: 1px solid #232d40; }
 button:disabled { opacity: .4; cursor: not-allowed; }
 .pager { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 12px; }
 .pager button { height: 30px; } main > div > input { width: 320px; }
+
+.grp { background: var(--card); border-radius: 8px; padding: 12px; margin: 12px 0; }
+.gh { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.term { background: var(--card); border-radius: 8px; padding: 12px; margin: 8px 0; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+tr.warn td { background: #2b2230; }
+td input { width: 100%; min-width: 90px; height: 30px; } select { height: 40px; background: var(--bg); color: var(--text); border: 1px solid #333c52; border-radius: 6px; }
+h3 { margin: 16px 0 4px; } td .muted, .term .row { margin: 0; }
