@@ -3,3 +3,8 @@ __pycache__/
 .env
 node_modules/
 credentials.json
+.venv/
+.secret_key
+.sessions/
+
+shopify_token.py
