@@ -235,22 +235,23 @@ function renderApply() {
     <div class="row"><label>Chunk <input id="n" type="number" value="25" min="1" max="100" style="width:70px"/></label>
       <label><input id="pub" type="checkbox"/> create as Active (default Draft)</label>
       <button id="create">1 · Create next chunk</button><button id="archive">2 · Archive old for next chunk</button>
+      <button id="publish">Publish to Online Store</button>
       <button id="cancel" class="ghost">Cancel</button><a href="/api/plan/mapping.csv" class="muted">Export mapping</a></div>
     <p id="msg"></p><div class="row"><select id="stage"><option value="to_create">To create</option>
-      <option value="to_archive">Created · old not archived</option><option value="partial">Partial / failed</option>
+      <option value="to_archive">Created · old not archived</option><option value="to_publish">Created · not published</option><option value="partial">Partial / failed</option>
       <option value="done">Done</option><option value="all">All</option></select><input id="q" placeholder="Search…"/></div>
     <div id="groups"></div><div class="pager"><span id="info"></span><button id="prev">←</button><button id="next">→</button></div></div>`);
   const LIMIT = 25; let offset = 0, debounce, wasRunning = false;
   const $ = (sel) => page.querySelector(sel);
   const body = (ids) => ({ group_ids: ids || [], limit: Number($('#n').value) || 25, publish: $('#pub').checked });
   const run = (step, ids) => async () => {
-    if (!confirm(step === 'create' ? 'Create products in Shopify?' : 'Archive the old products for these groups?')) return;
+    if (!confirm({ create: 'Create products in Shopify?', archive: 'Archive the old products for these groups?', publish: 'Publish these products to the Online Store?' }[step])) return;
     try { await post(`/apply/${step}`, body(ids)); } catch (e) { alert(e.message); }
     poll();
   };
   async function loadSummary() {
     const m = await api('/apply/summary');
-    $('#chips').innerHTML = `<span class="tag">${m.to_create} to create</span><span class="tag">${m.to_archive} created, old not archived</span>
+    $('#chips').innerHTML = `<span class="tag">${m.to_create} to create</span><span class="tag">${m.to_archive} created, old not archived</span><span class="tag">${m.to_publish} not on Online Store</span>
       <span class="tag ${m.partial ? 'bad' : ''}">${m.partial} partial</span><span class="tag">${m.done} done</span>`;
   }
   async function loadGroups() {
@@ -259,6 +260,8 @@ function renderApply() {
       <span class="tag">${esc(g.format || '')}</span> <span class="mono">${esc(g.handle)}</span></div>
       <div class="row"><span class="tag ${g.created === g.n ? 'ok' : ''}">created ${g.created}/${g.n}</span>
       <span class="tag ${g.archived === g.n ? 'ok' : ''}">old archived ${g.archived}/${g.n}</span>
+      <span class="tag ${g.published_at ? 'ok' : ''}">${g.published_at ? 'on Online Store' : 'not published'}</span>
+      ${g.created === g.n && !g.published_at ? '<button class="ghost" data-act="publish">Publish</button>' : ''}
       ${!g.new_product_id ? '<button data-act="create">Create</button>' : g.created === g.n && g.archived < g.n ? '<button data-act="archive">Archive old</button>' : g.created < g.n ? '<button data-act="create">Resume</button>' : ''}</div></div>
       ${g.error ? `<div class="err">${esc(g.error)}</div>` : ''}
       <table><thead><tr><th>Variant</th><th>Old product</th><th>Old qty</th><th>Copied</th><th>New</th><th>Old</th></tr></thead><tbody>
@@ -271,18 +274,19 @@ function renderApply() {
       const id = Number(gEl.dataset.id);
       gEl.querySelector('[data-act=create]')?.addEventListener('click', run('create', [id]));
       gEl.querySelector('[data-act=archive]')?.addEventListener('click', run('archive', [id]));
+      gEl.querySelector('[data-act=publish]')?.addEventListener('click', run('publish', [id]));
     });
   }
   async function poll() {
     const s = await api('/apply/status');
     $('#msg').innerHTML = s.running ? `Running ${s.step}: ${s.done}/${s.total} — ${esc(s.current)}`
       : (s.step ? `Last ${s.step}: ${s.done}/${s.total}` : '') + (s.errors.length ? ` · ${s.errors.length} failed:<br>` + s.errors.map((e) => `${esc(e.title)} — ${esc(e.message)}`).join('<br>') : '');
-    page.querySelectorAll('#create,#archive').forEach((b) => (b.disabled = s.running));
+    page.querySelectorAll('#create,#archive,#publish').forEach((b) => (b.disabled = s.running));
     $('#cancel').disabled = !s.running;
     if (wasRunning && !s.running) { loadSummary(); loadGroups(); }
     wasRunning = s.running;
   }
-  $('#create').onclick = run('create'); $('#archive').onclick = run('archive');
+  $('#create').onclick = run('create'); $('#archive').onclick = run('archive'); $('#publish').onclick = run('publish');
   $('#cancel').onclick = () => post('/apply/cancel');
   $('#stage').onchange = () => { offset = 0; loadGroups(); };
   $('#q').oninput = () => { clearTimeout(debounce); debounce = setTimeout(() => { offset = 0; loadGroups(); }, 300); };

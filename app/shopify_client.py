@@ -25,7 +25,8 @@ query($cursor: String, $query: String, $first: Int!, $vfirst: Int!) {
       category { id fullName }
       options { name position }
       media(first: 1) { nodes { preview { image { url } } } }
-      upc: metafield(namespace: "facts", key: "upc") { value }
+      upc: metafield(namespace: "custom", key: "upc") { value }
+      genres: metafield(namespace: "custom", key: "genres") { value }
       variants(first: $vfirst) {
         pageInfo { hasNextPage endCursor }
         nodes { %s }
@@ -180,6 +181,7 @@ class ShopifyClient:
             "category_name": cat.get("fullName"),
             "tags": node.get("tags") or [],
             "upc_metafield": (node.get("upc") or {}).get("value"),
+            "genres": (node.get("genres") or {}).get("value"),
             "image_urls": [
                 m["preview"]["image"]["url"]
                 for m in (node.get("media") or {}).get("nodes", [])
@@ -236,6 +238,8 @@ query($ids: [ID!]!) {
       product {
         id title vendor productType tags status descriptionHtml
         category { id }
+        upc: metafield(namespace: "custom", key: "upc") { value type }
+        genres: metafield(namespace: "custom", key: "genres") { value type }
         media(first: 10) { nodes { ... on MediaImage { image { url } alt } } }
       }
     }
@@ -284,6 +288,13 @@ mutation($input: InventorySetQuantitiesInput!) {
 _M_INV_ADJUST = """
 mutation($input: InventoryAdjustQuantitiesInput!) {
   inventoryAdjustQuantities(input: $input) { userErrors { field message } }
+}"""
+
+_Q_PUBLICATIONS = "query { publications(first: 30) { nodes { id name } } }"
+
+_M_PUBLISH = """
+mutation($id: ID!, $input: [PublicationInput!]!) {
+  publishablePublish(id: $id, input: $input) { userErrors { field message } }
 }"""
 
 _M_PRODUCT_UPDATE = """
@@ -370,7 +381,18 @@ def set_product_status(self, product_id: str, status: str) -> None:
     self._mutate(_M_PRODUCT_UPDATE, {"product": {"id": product_id, "status": status}}, "productUpdate")
 
 
-for _fn in (_mutate, fetch_variants, primary_location_id, create_product, get_product_variants,
+def online_store_publication_id(self) -> str:
+    for n in self._request(_Q_PUBLICATIONS)["data"]["publications"]["nodes"]:
+        if (n.get("name") or "").strip().lower() == "online store":
+            return n["id"]
+    raise RuntimeError("Online Store publication not found (token needs read_publications / write_publications)")
+
+
+def publish_product(self, product_id: str, publication_id: str) -> None:
+    self._mutate(_M_PUBLISH, {"id": product_id, "input": [{"publicationId": publication_id}]}, "publishablePublish")
+
+
+for _fn in (online_store_publication_id, publish_product, _mutate, fetch_variants, primary_location_id, create_product, get_product_variants,
             bulk_create_variants, bulk_update_variants, set_quantities, adjust_quantities, set_product_status):
     setattr(ShopifyClient, _fn.__name__, _fn)
 ShopifyClient.available_at = staticmethod(available_at)

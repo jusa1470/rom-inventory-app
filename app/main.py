@@ -251,6 +251,11 @@ def apply_archive(body: ApplyIn):
     return _apply("archive", "to_archive", body)
 
 
+@app.post("/api/apply/publish", dependencies=_plan)
+def apply_publish(body: ApplyIn):
+    return _apply("publish", "to_publish", body)
+
+
 @app.get("/api/apply/status", dependencies=_plan)
 def apply_status():
     return applier.status()

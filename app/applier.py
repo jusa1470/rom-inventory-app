@@ -4,6 +4,7 @@
                Fresh price/cost/weight/quantity is pulled from the old variants
                first. New products are DRAFT unless `publish` is set, so the
                storefront never shows both old and new listings by accident.
+  3. PUBLISH – (separate button) publish each created product to the Online Store.
   2. ARCHIVE – per group, once created: carry over any sales made on the old
                listing since step 1 (quantity delta), make the new product
                ACTIVE if it is still a draft, then archive the old products.
@@ -67,6 +68,9 @@ STAGES = {
     # started but incomplete (failed part-way)
     "partial": """g.new_product_id IS NOT NULL
                   AND EXISTS (SELECT 1 FROM plan_variants v WHERE v.plan_product_id=g.id AND v.new_variant_id IS NULL)""",
+    # created fully, not yet on the Online Store
+    "to_publish": """g.new_product_id IS NOT NULL AND g.published_at IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM plan_variants v WHERE v.plan_product_id=g.id AND v.new_variant_id IS NULL)""",
     "all": "g.status='approved' OR g.new_product_id IS NOT NULL",
 }
 
@@ -85,7 +89,7 @@ def list_groups(stage: str = "all", q: str = "", limit: int = 25, offset: int = 
         total = conn.execute(f"SELECT COUNT(*) FROM plan_products g WHERE ({where}) {qf}", params).fetchone()[0]
         groups = conn.execute(
             f"""SELECT g.id, g.handle, g.title, g.vendor, g.status, g.new_product_id, g.new_status,
-                       g.created_at_shopify, g.error FROM plan_products g
+                       g.created_at_shopify, g.published_at, g.error FROM plan_products g
                 WHERE ({where}) {qf} ORDER BY g.title LIMIT :limit OFFSET :offset""", params).fetchall()
         out = []
         for g in groups:
@@ -114,8 +118,8 @@ def next_group_ids(stage: str, limit: int) -> list[int]:
 # ── job runner ───────────────────────────────────────────────────────
 
 def start(client: ShopifyClient, step: str, group_ids: list[int], publish: bool = False) -> bool:
-    if step not in ("create", "archive"):
-        raise ValueError("step must be create or archive")
+    if step not in ("create", "archive", "publish"):
+        raise ValueError("step must be create, archive or publish")
     with _lock:
         if _status["running"]:
             return False
@@ -129,11 +133,19 @@ def start(client: ShopifyClient, step: str, group_ids: list[int], publish: bool 
 def _run(client, step, group_ids, publish):
     try:
         location = db.get_state("shopify_location_id")
-        if not location:
+        if not location and step != "publish":
             location = client.primary_location_id()
             db.set_state("shopify_location_id", location)
-        fn: Callable = (lambda gid: create_group(client, location, gid, publish)) if step == "create" \
-            else (lambda gid: archive_group(client, location, gid))
+        if step == "publish":
+            pub = db.get_state("online_store_publication_id")
+            if not pub:
+                pub = client.online_store_publication_id()
+                db.set_state("online_store_publication_id", pub)
+            fn: Callable = lambda gid: publish_group(client, pub, gid)
+        elif step == "create":
+            fn = lambda gid: create_group(client, location, gid, publish)
+        else:
+            fn = lambda gid: archive_group(client, location, gid)
         for gid in group_ids:
             if _cancel.is_set():
                 break
@@ -223,6 +235,15 @@ def create_group(client: ShopifyClient, location_id: str, group_id: int, publish
         }
         if g["category_id"]:
             product["category"] = g["category_id"]
+        metafields = []
+        for key in ("upc", "genres"):          # first source (in variant order) that has a value
+            for s in sources:
+                mf = (s["product"].get(key) or {})
+                if mf.get("value"):
+                    metafields.append({"namespace": "custom", "key": key, "type": mf["type"], "value": mf["value"]})
+                    break
+        if metafields:
+            product["metafields"] = metafields
         media = [{"originalSource": u, "mediaContentType": "IMAGE", "alt": g["title"]} for u in urls[:10]]
         created = client.create_product(product, media)
         with db.connect() as conn:
@@ -261,6 +282,18 @@ def create_group(client: ShopifyClient, location_id: str, group_id: int, publish
             "UPDATE plan_variants SET new_variant_id=?, new_inventory_item_id=?, qty_copied=?, "
             "updated_at=datetime('now') WHERE id=?", rows)
         conn.execute("UPDATE plan_products SET created_at_shopify=?, error=NULL WHERE id=?", (_now(), group_id))
+
+
+# ── publish to Online Store ──────────────────────────────────────────
+
+def publish_group(client: ShopifyClient, publication_id: str, group_id: int) -> None:
+    with db.connect() as conn:
+        g = dict(conn.execute("SELECT * FROM plan_products WHERE id=?", (group_id,)).fetchone())
+    if not g["new_product_id"]:
+        raise ValueError("group is not created yet")
+    client.publish_product(g["new_product_id"], publication_id)
+    with db.connect() as conn:
+        conn.execute("UPDATE plan_products SET published_at=? WHERE id=?", (_now(), group_id))
 
 
 # ── step 2: archive ──────────────────────────────────────────────────

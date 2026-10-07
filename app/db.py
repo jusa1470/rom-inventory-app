@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS shopify_products (
   category_id   TEXT,
   category_name TEXT,
   tags          TEXT,            -- JSON list
-  upc_metafield TEXT,            -- facts.upc
+  upc_metafield TEXT,            -- custom.upc
+  genres        TEXT,            -- custom.genres
   image_urls    TEXT,            -- JSON list
   option_names  TEXT,            -- JSON list, e.g. ["Edition","Color","Attributes"]
   created_at    TEXT,
@@ -127,7 +128,8 @@ def init_db() -> None:
                                ("new_inventory_item_id", "TEXT"), ("qty_copied", "INTEGER"),
                                ("archived_at", "TEXT"))),
             ("plan_products", (("created_at_shopify", "TEXT"), ("new_status", "TEXT"), ("error", "TEXT"),
-                               ("category_name", "TEXT"), ("format", "TEXT"))),
+                               ("category_name", "TEXT"), ("format", "TEXT"), ("published_at", "TEXT"))),
+            ("shopify_products", (("genres", "TEXT"),)),
         ):
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
             for col, ddl in additions:

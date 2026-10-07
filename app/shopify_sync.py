@@ -79,19 +79,19 @@ def upsert_product(p: dict) -> None:
         conn.execute(
             """INSERT INTO shopify_products
                (product_id,handle,title,vendor,status,product_type,category_id,category_name,
-                tags,upc_metafield,image_urls,option_names,created_at,updated_at,last_synced)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                tags,upc_metafield,genres,image_urls,option_names,created_at,updated_at,last_synced)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                ON CONFLICT(product_id) DO UPDATE SET
                  handle=excluded.handle, title=excluded.title, vendor=excluded.vendor,
                  status=excluded.status, product_type=excluded.product_type,
                  category_id=excluded.category_id, category_name=excluded.category_name,
-                 tags=excluded.tags, upc_metafield=excluded.upc_metafield,
+                 tags=excluded.tags, upc_metafield=excluded.upc_metafield, genres=excluded.genres,
                  image_urls=excluded.image_urls, option_names=excluded.option_names,
                  created_at=excluded.created_at, updated_at=excluded.updated_at,
                  last_synced=excluded.last_synced""",
             (p["product_id"], p["handle"], p["title"], p["vendor"], p["status"],
              p["product_type"], p["category_id"], p["category_name"],
-             json.dumps(p["tags"]), p["upc_metafield"], json.dumps(p["image_urls"]),
+             json.dumps(p["tags"]), p["upc_metafield"], p["genres"], json.dumps(p["image_urls"]),
              json.dumps(p["option_names"]), p["created_at"], p["updated_at"]),
         )
         ids = [v["variant_id"] for v in p["variants"]]
