@@ -122,10 +122,17 @@ def init_db() -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
         # migrate plan_variants created by an earlier version of the schema
-        cols = {r["name"] for r in conn.execute("PRAGMA table_info(plan_variants)")}
-        for col, ddl in (("unknown_terms", "TEXT"), ("reason", "TEXT"), ("manual", "INTEGER DEFAULT 0")):
-            if col not in cols:
-                conn.execute(f"ALTER TABLE plan_variants ADD COLUMN {col} {ddl}")
+        for table, additions in (
+            ("plan_variants", (("unknown_terms", "TEXT"), ("reason", "TEXT"), ("manual", "INTEGER DEFAULT 0"),
+                               ("new_inventory_item_id", "TEXT"), ("qty_copied", "INTEGER"),
+                               ("archived_at", "TEXT"))),
+            ("plan_products", (("created_at_shopify", "TEXT"), ("new_status", "TEXT"), ("error", "TEXT"),
+                               ("category_name", "TEXT"), ("format", "TEXT"))),
+        ):
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for col, ddl in additions:
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
 
 def get_state(key: str) -> str | None:

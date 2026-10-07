@@ -211,3 +211,166 @@ class ShopifyClient:
             "weight": weight.get("value"),
             "weight_unit": weight.get("unit"),
         }
+
+
+# ── apply-step API (create / archive) ────────────────────────────────
+
+class ShopifyUserError(RuntimeError):
+    pass
+
+
+_Q_VARIANTS_FRESH = """
+query($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on ProductVariant {
+      id sku barcode price taxable
+      selectedOptions { name value }
+      inventoryItem {
+        id
+        unitCost { amount }
+        measurement { weight { value unit } }
+        inventoryLevels(first: 10) {
+          nodes { location { id } quantities(names: ["available"]) { name quantity } }
+        }
+      }
+      product {
+        id title vendor productType tags status descriptionHtml
+        category { id }
+        media(first: 10) { nodes { ... on MediaImage { image { url } alt } } }
+      }
+    }
+  }
+}"""
+
+_Q_LOCATIONS = "query { locations(first: 20) { nodes { id name isPrimary } } }"
+
+_Q_PRODUCT_VARIANTS = """
+query($id: ID!) {
+  product(id: $id) {
+    id handle status
+    variants(first: 100) { nodes { id selectedOptions { name value } inventoryItem { id } } }
+  }
+}"""
+
+_M_PRODUCT_CREATE = """
+mutation($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
+  productCreate(product: $product, media: $media) {
+    product { id handle status }
+    userErrors { field message }
+  }
+}"""
+
+_M_VARIANTS_CREATE = """
+mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+  productVariantsBulkCreate(productId: $productId, variants: $variants) {
+    productVariants { id selectedOptions { name value } inventoryItem { id } }
+    userErrors { field message }
+  }
+}"""
+
+_M_VARIANTS_UPDATE = """
+mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+  productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+    productVariants { id }
+    userErrors { field message }
+  }
+}"""
+
+_M_INV_SET = """
+mutation($input: InventorySetQuantitiesInput!) {
+  inventorySetQuantities(input: $input) { userErrors { field message } }
+}"""
+
+_M_INV_ADJUST = """
+mutation($input: InventoryAdjustQuantitiesInput!) {
+  inventoryAdjustQuantities(input: $input) { userErrors { field message } }
+}"""
+
+_M_PRODUCT_UPDATE = """
+mutation($product: ProductUpdateInput!) {
+  productUpdate(product: $product) { product { id status } userErrors { field message } }
+}"""
+
+
+def _mutate(self, query: str, variables: dict, key: str) -> dict:
+    data = self._request(query, variables)["data"][key]
+    errs = data.get("userErrors") or []
+    if errs:
+        raise ShopifyUserError("; ".join(f"{'.'.join(map(str, e.get('field') or []))}: {e['message']}" for e in errs))
+    return data
+
+
+def fetch_variants(self, ids: list[str]) -> dict[str, dict]:
+    """Fresh data (price, cost, weight, per-location 'available', product info) keyed by variant GID."""
+    out: dict[str, dict] = {}
+    for i in range(0, len(ids), 10):
+        for node in self._request(_Q_VARIANTS_FRESH, {"ids": ids[i:i + 10]})["data"]["nodes"]:
+            if node:
+                out[node["id"]] = node
+    return out
+
+
+def available_at(node: dict, location_id: str) -> int:
+    for lvl in ((node.get("inventoryItem") or {}).get("inventoryLevels") or {}).get("nodes", []):
+        if lvl["location"]["id"] == location_id:
+            for q in lvl.get("quantities") or []:
+                if q["name"] == "available":
+                    return int(q["quantity"])
+    return 0
+
+
+def primary_location_id(self) -> str:
+    nodes = self._request(_Q_LOCATIONS)["data"]["locations"]["nodes"]
+    for n in nodes:
+        if n.get("isPrimary"):
+            return n["id"]
+    if nodes:
+        return nodes[0]["id"]
+    raise RuntimeError("No Shopify locations found")
+
+
+def create_product(self, product: dict, media: list[dict]) -> dict:
+    return self._mutate(_M_PRODUCT_CREATE, {"product": product, "media": media or None}, "productCreate")["product"]
+
+
+def get_product_variants(self, product_id: str) -> list[dict]:
+    p = self._request(_Q_PRODUCT_VARIANTS, {"id": product_id})["data"]["product"]
+    return p["variants"]["nodes"] if p else []
+
+
+def bulk_create_variants(self, product_id: str, variants: list[dict]) -> list[dict]:
+    if not variants:
+        return []
+    return self._mutate(_M_VARIANTS_CREATE, {"productId": product_id, "variants": variants},
+                        "productVariantsBulkCreate")["productVariants"]
+
+
+def bulk_update_variants(self, product_id: str, variants: list[dict]) -> None:
+    if variants:
+        self._mutate(_M_VARIANTS_UPDATE, {"productId": product_id, "variants": variants}, "productVariantsBulkUpdate")
+
+
+def set_quantities(self, location_id: str, items: list[tuple[str, int]]) -> None:
+    if items:
+        self._mutate(_M_INV_SET, {"input": {
+            "name": "available", "reason": "correction", "ignoreCompareQuantity": True,
+            "quantities": [{"inventoryItemId": i, "locationId": location_id, "quantity": q} for i, q in items],
+        }}, "inventorySetQuantities")
+
+
+def adjust_quantities(self, location_id: str, items: list[tuple[str, int]]) -> None:
+    if items:
+        self._mutate(_M_INV_ADJUST, {"input": {
+            "name": "available", "reason": "correction",
+            "changes": [{"inventoryItemId": i, "locationId": location_id, "delta": d} for i, d in items],
+        }}, "inventoryAdjustQuantities")
+
+
+def set_product_status(self, product_id: str, status: str) -> None:
+    self._mutate(_M_PRODUCT_UPDATE, {"product": {"id": product_id, "status": status}}, "productUpdate")
+
+
+for _fn in (_mutate, fetch_variants, primary_location_id, create_product, get_product_variants,
+            bulk_create_variants, bulk_update_variants, set_quantities, adjust_quantities, set_product_status):
+    setattr(ShopifyClient, _fn.__name__, _fn)
+ShopifyClient.available_at = staticmethod(available_at)

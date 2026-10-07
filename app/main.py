@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from contextlib import asynccontextmanager
 
-from app import db, planner, shopify_sync, vault
+from app import applier, db, planner, shopify_sync, vault
 from app.shopify_client import ShopifyClient
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
@@ -186,6 +186,22 @@ def plan_edit_variant(variant_id: int, body: VariantEdit):
     return {"ok": True}
 
 
+class MoveIn(BaseModel):
+    group_id: int | None = None
+    new_title: str = ""
+
+
+@app.post("/api/plan/variants/{variant_id}/move", dependencies=_plan)
+def plan_move(variant_id: int, body: MoveIn):
+    _guard(planner.move_variant, variant_id, body.group_id, body.new_title)
+    return {"ok": True}
+
+
+@app.get("/api/plan/groups/{group_id}/addable", dependencies=_plan)
+def plan_addable(group_id: int, q: str = ""):
+    return _guard(planner.search_addable, group_id, q)
+
+
 @app.post("/api/plan/groups/{group_id}/approve", dependencies=_plan)
 def plan_approve(group_id: int):
     _guard(planner.set_group_approved, group_id, True)
@@ -196,6 +212,71 @@ def plan_approve(group_id: int):
 def plan_unapprove(group_id: int):
     _guard(planner.set_group_approved, group_id, False)
     return {"ok": True}
+
+
+# ── Apply (create / archive) ────────────────────────────────────────
+
+class ApplyIn(BaseModel):
+    group_ids: list[int] = []
+    limit: int = 25
+    publish: bool = False
+
+
+@app.get("/api/apply/summary", dependencies=_plan)
+def apply_summary():
+    return applier.summary()
+
+
+@app.get("/api/apply/groups", dependencies=_plan)
+def apply_groups(stage: str = "all", q: str = "", limit: int = 25, offset: int = 0):
+    return applier.list_groups(stage, q, max(1, min(limit, 100)), max(0, offset))
+
+
+def _apply(step: str, stage: str, body: ApplyIn):
+    ids = body.group_ids or applier.next_group_ids(stage, max(1, min(body.limit, 100)))
+    if not ids:
+        raise HTTPException(400, "Nothing to do")
+    if not applier.start(ShopifyClient.from_creds(get_creds()), step, ids, body.publish):
+        raise HTTPException(409, "An apply job is already running")
+    return applier.status()
+
+
+@app.post("/api/apply/create", dependencies=_plan)
+def apply_create(body: ApplyIn):
+    return _apply("create", "to_create", body)
+
+
+@app.post("/api/apply/archive", dependencies=_plan)
+def apply_archive(body: ApplyIn):
+    return _apply("archive", "to_archive", body)
+
+
+@app.get("/api/apply/status", dependencies=_plan)
+def apply_status():
+    return applier.status()
+
+
+@app.post("/api/apply/cancel", dependencies=_plan)
+def apply_cancel():
+    applier.cancel()
+    return {"ok": True}
+
+
+@app.get("/api/plan/mapping.csv", dependencies=_plan)
+def mapping_csv():
+    import csv, io
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["old_product_id", "old_variant_id", "new_product_id", "new_variant_id", "handle",
+                "edition", "color", "attributes", "qty_copied", "old_archived_at"])
+    with db.connect() as conn:
+        for r in conn.execute(
+                """SELECT v.source_product_id, v.source_variant_id, g.new_product_id, v.new_variant_id, g.handle,
+                          v.edition, v.color, v.attributes, v.qty_copied, v.archived_at
+                   FROM plan_variants v JOIN plan_products g ON g.id=v.plan_product_id ORDER BY g.handle"""):
+            w.writerow(list(r))
+    return Response(out.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=catalog-mapping.csv"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

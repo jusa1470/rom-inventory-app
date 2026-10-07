@@ -29,3 +29,9 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 tr.warn td { background: #2b2230; }
 td input { width: 100%; min-width: 90px; height: 30px; } select { height: 40px; background: var(--bg); color: var(--text); border: 1px solid #333c52; border-radius: 6px; }
 h3 { margin: 16px 0 4px; } td .muted, .term .row { margin: 0; }
+
+.tag { background: #2a3550; border-radius: 10px; padding: 1px 8px; font-size: 12px; margin: 0 6px; }
+.tag.bad { background: #5a2a30; } .tag.ok { background: #1f4d3a; }
+.err { color: var(--red); padding: 6px 0; }
+.addbox { margin: 8px 0; } .addbox input { width: 100%; } .hit { padding: 6px 8px; cursor: pointer; border-top: 1px solid #232d40; } .hit:hover { background: #2a3550; }
+label { display: flex; align-items: center; gap: 6px; color: var(--muted); } input[type=checkbox] { height: auto; }

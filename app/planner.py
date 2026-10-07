@@ -17,9 +17,10 @@ from app import db
 
 MAX_PHRASE = 6
 WORD_KINDS = {"edition", "color", "attribute", "ignore"}
-ALL_KINDS = WORD_KINDS | {"title", "format", "default"}
+ALL_KINDS = WORD_KINDS | {"title", "segment", "default"}
 NO_ATTRS = "~no-attributes"
-DEFAULT_EDITION = "Standard"
+NO_EDITION = "~no-edition"
+_USED_TITLE = re.compile(r"\s-\s*U\s*$", re.I)
 FROZEN = ("approved", "applied")
 
 # ── text helpers ─────────────────────────────────────────────────────
@@ -104,22 +105,78 @@ def _uniq(items: list[str]) -> list[str]:
     return res
 
 
+def is_excluded(title: str, tags_json: str) -> bool:
+    """Used items ("... - U" titles or a 'Used' tag) have no explicit variants."""
+    if _USED_TITLE.search(title or ""):
+        return True
+    try:
+        tags = json.loads(tags_json or "[]")
+    except ValueError:
+        tags = []
+    return any(str(t).strip().lower() == "used" for t in tags)
+
+
+def format_of(p: dict, rules: dict) -> tuple[Optional[str], str, list[str], list[str]]:
+    """Format comes from the Shopify category (last path segment). Product type, if it differs
+    from that, must be confirmed once per (category, type) pair. Returns (slug, label, reasons, unknown)."""
+    cat = (p.get("category_name") or "").strip()
+    if not cat:
+        pt = (p.get("product_type") or "").strip()
+        return None, "", ["no category" + (f" (product type: {pt})" if pt else "")], []
+    label = cat.split(">")[-1].strip()
+    unknown = []
+    pt = norm(p.get("product_type") or "")
+    if pt and pt != norm(label):
+        k = f"~ptype:{norm(cat)}|{pt}"
+        if not (rules.get(k) or {}).get("kind") == "default":
+            unknown.append(k)
+    return slug(label), label, [], unknown
+
+
+def _segment_rule(r: dict) -> dict:
+    try:
+        return json.loads(r["value"] or "{}")
+    except ValueError:
+        return {}
+
+
 def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
-    """p: title, vendor, category_name, product_type."""
+    """p: title, vendor, category_name, product_type. Anything not fully explained by a rule
+    the user taught is returned in `unknown` / `reasons` and never guessed."""
     base, segments = split_title(p.get("title") or "")
     editions: list[str] = []
     colors: list[str] = []
     attrs: list[str] = []
     unknown: list[str] = []
     reasons: list[str] = []
+    ignored_only = 0
 
     for original, inner in segments:
-        r = rules.get(norm(inner))
+        key = norm(inner)
+        if not key:
+            continue
+        r = rules.get(key)
         if r and r["kind"] == "title":      # user said this text is part of the title
             base += original if original.startswith(" ") else " " + original
             continue
+        if r and r["kind"] == "ignore":
+            ignored_only += 1
+            continue
+        if r and r["kind"] == "segment":
+            v = _segment_rule(r)
+            if v.get("edition"):
+                editions.append(v["edition"])
+            if v.get("color"):
+                colors.append(v["color"])
+            attrs.extend(a.strip() for a in (v.get("attributes") or "").split(",") if a.strip())
+            continue
         matches, unk = parse_phrase(inner, rules)
-        unknown.extend(unk)
+        kinds = [k for k, _ in matches]
+        if unk or kinds.count("color") > 1 or kinds.count("edition") > 1:
+            unknown.append(key)             # whole segment must be explained, or the user decides
+            continue
+        if matches and all(k == "ignore" for k in kinds):
+            ignored_only += 1
         for kind, value in matches:
             if kind == "edition" and value:
                 editions.append(value)
@@ -135,28 +192,34 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
     if not (p.get("vendor") or "").strip():
         reasons.append("no vendor (artist)")
 
-    # format (from category / product type)
-    key = norm(p.get("category_name") or "") or norm(p.get("product_type") or "")
-    fmt_rule = rules.get(f"~format:{key}")
-    if fmt_rule and fmt_rule["kind"] == "format" and fmt_rule["value"]:
-        fmt = slug(fmt_rule["value"])
-    else:
-        fmt = "unclassified"
-        unknown.append(f"~format:{key}")
+    fmt, fmt_label, fmt_reasons, fmt_unknown = format_of(p, rules)
+    reasons += fmt_reasons
+    unknown += fmt_unknown
 
-    # edition
     editions = _uniq(editions)
     if len(editions) > 1:
         edition = None
         reasons.append("multiple editions: " + ", ".join(editions))
+    elif editions:
+        edition = editions[0]
     else:
-        edition = editions[0] if editions else DEFAULT_EDITION
+        r = rules.get(NO_EDITION)
+        if r and r["kind"] == "default" and r["value"]:
+            edition = r["value"]
+        else:
+            edition = None
+            unknown.append(NO_EDITION)
 
-    # color
     colors = _uniq(colors)
-    if colors:
-        color = " / ".join(colors)
-    elif fmt != "unclassified":
+    if len(colors) > 1:
+        color = None
+        reasons.append("multiple colors: " + ", ".join(colors))
+    elif colors:
+        color = colors[0]
+    elif ignored_only:
+        color = None
+        reasons.append("color not stated (title has only generic descriptors)")
+    elif fmt:
         r = rules.get(f"~no-color:{fmt}")
         if r and r["kind"] == "default" and r["value"]:
             color = r["value"]
@@ -166,7 +229,6 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
     else:
         color = None
 
-    # attributes
     attrs = sorted(_uniq(attrs), key=str.lower)
     if attrs:
         attributes = ", ".join(attrs)
@@ -184,7 +246,7 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
     unknown = _uniq(unknown)
     ready = not unknown and not reasons and None not in (edition, color, attributes)
     return {
-        "base": base, "format": fmt, "edition": edition, "color": color,
+        "base": base, "format": fmt, "format_label": fmt_label, "edition": edition, "color": color,
         "attributes": attributes, "unknown": unknown, "reasons": reasons, "ready": ready,
     }
 
@@ -216,21 +278,15 @@ def _suggest_chunk(words: list[str]) -> Optional[dict]:
 
 
 def suggest(term: str) -> Optional[list[dict]]:
-    """Suggested rules for an unknown term (a list; the user must confirm them)."""
-    if term.startswith("~format:"):
-        words = term[8:].split()
-        v = None
-        if {"vinyl", "lp", "lps", "records"} & set(words):
-            v = "vinyl"
-        elif any(w.startswith("cd") for w in words) or "compact" in words:
-            v = "cd"
-        elif {"cassette", "cassettes", "tape", "tapes"} & set(words):
-            v = "cassette"
-        return [{"term": term, "kind": "format", "value": v}] if v else None
+    """Suggested WORD rules for an unknown segment (the user must click to accept)."""
     if term.startswith("~no-color:"):
         return [{"term": term, "kind": "default", "value": "Black" if term.endswith("vinyl") else "None"}]
     if term == NO_ATTRS:
         return [{"term": term, "kind": "default", "value": "None"}]
+    if term == NO_EDITION:
+        return [{"term": term, "kind": "default", "value": "Standard"}]
+    if term.startswith("~ptype:"):
+        return [{"term": term, "kind": "default", "value": "ok"}]
     rules: list[dict] = []
     chunk: list[str] = []
     for w in term.split() + [None]:
@@ -249,21 +305,40 @@ def suggest(term: str) -> Optional[list[dict]]:
 
 
 def term_label(term: str) -> str:
-    if term.startswith("~format:"):
-        return f"Format for category/type “{term[8:] or '(none)'}”"
     if term.startswith("~no-color:"):
         return f"Color to use when none is stated ({term[10:]})"
+    if term.startswith("~ptype:"):
+        cat, _, pt = term[7:].partition("|")
+        return f"Is product type “{pt}” the same as category “{cat}”? (confirm to proceed)"
     if term == NO_ATTRS:
         return "Attributes value to use when none are stated"
+    if term == NO_EDITION:
+        return "Edition value to use when none is stated"
     return term
 
 
 def allowed_kinds(term: str) -> list[str]:
-    if term.startswith("~format:"):
-        return ["format"]
-    if term.startswith("~no-color:") or term == NO_ATTRS:
+    if term.startswith(("~no-color:", "~ptype:")) or term in (NO_ATTRS, NO_EDITION):
         return ["default"]
-    return ["color", "edition", "attribute", "ignore", "title"]
+    return ["segment", "title", "ignore"]
+
+
+def prefill(term: str, rules: dict) -> dict:
+    """What the existing word rules already explain about a segment (display only)."""
+    if term.startswith("~"):
+        return {}
+    matches, _ = parse_phrase(term, rules)
+    out = {"edition": "", "color": "", "attributes": ""}
+    attrs = []
+    for kind, value in matches:
+        if kind == "edition":
+            out["edition"] = value
+        elif kind == "color":
+            out["color"] = value
+        elif kind == "attribute":
+            attrs.append(value)
+    out["attributes"] = ", ".join(attrs)
+    return out
 
 
 # ── build ────────────────────────────────────────────────────────────
@@ -274,46 +349,55 @@ def build_plan() -> dict:
     with db.connect() as conn:
         rules = load_rules(conn)
         products = conn.execute(
-            """SELECT product_id, title, vendor, category_id, category_name, product_type
+            """SELECT product_id, title, vendor, category_id, category_name, product_type, tags
                FROM shopify_products WHERE status != 'ARCHIVED'""").fetchall()
         variants = defaultdict(list)
         for v in conn.execute("SELECT variant_id, product_id FROM shopify_variants"):
             variants[v["product_id"]].append(v["variant_id"])
         existing = {r["source_variant_id"]: r for r in conn.execute(
-            "SELECT id, source_variant_id, manual, status FROM plan_variants")}
+            "SELECT id, source_variant_id, manual, status, new_variant_id FROM plan_variants")}
 
         live: set[str] = set()
         group_cache: dict[str, int] = {}
-        counts = {"products": 0, "ready": 0, "needs_review": 0, "skipped_frozen": 0}
+        counts = {"products": 0, "ready": 0, "needs_review": 0, "skipped_frozen": 0, "excluded_used": 0}
 
         for p in products:
             vids = variants.get(p["product_id"], [])
             if not vids:
                 continue
+            if is_excluded(p["title"], p["tags"]):
+                counts["excluded_used"] += 1
+                continue
             c = classify(dict(p), rules, n_variants=len(vids))
-            handle = f"{slug(p['vendor'] or 'unknown')}-{slug(c['base'])}-{c['format']}"
+            handle = f"{slug(p['vendor'] or 'unknown')}-{slug(c['base'])}" + (f"-{c['format']}" if c["format"] else "")
             counts["products"] += 1
             for vid in vids:
                 live.add(vid)
                 ex = existing.get(vid)
-                if ex and (ex["manual"] or ex["status"] in FROZEN):
+                if ex and (ex["manual"] or ex["status"] in FROZEN or ex["new_variant_id"]):
                     counts["skipped_frozen"] += 1
                     continue
-                gid = group_cache.get(handle)
+                gkey = f"{handle}|{p['category_id']}"
+                gid = group_cache.get(gkey)
                 if gid is None:
-                    row = conn.execute("SELECT id FROM plan_products WHERE handle=?", (handle,)).fetchone()
+                    h = handle
+                    row = conn.execute("SELECT id, category_id FROM plan_products WHERE handle=?", (h,)).fetchone()
+                    if row and row["category_id"] != p["category_id"]:   # same name, different category: never merge
+                        h = f"{handle}-{slug((p['category_id'] or 'none').split('/')[-1])}"
+                        row = conn.execute("SELECT id, category_id FROM plan_products WHERE handle=?", (h,)).fetchone()
                     if row:
                         gid = row["id"]
                     else:
                         gid = conn.execute(
-                            """INSERT INTO plan_products(handle,title,vendor,product_type,category_id)
-                               VALUES (?,?,?,?,?)""",
-                            (handle, c["base"], p["vendor"], p["product_type"], p["category_id"]),
+                            """INSERT INTO plan_products(handle,title,vendor,product_type,category_id,category_name,format)
+                               VALUES (?,?,?,?,?,?,?)""",
+                            (h, c["base"], p["vendor"], p["product_type"], p["category_id"],
+                             p["category_name"], c["format_label"] or None),
                         ).lastrowid
-                    group_cache[handle] = gid
+                    group_cache[gkey] = gid
                 status = "ready" if c["ready"] else "needs_review"
                 counts["ready" if c["ready"] else "needs_review"] += 1
-                args = (gid, p["product_id"], vid, c["edition"], c["color"], c["attributes"],
+                args = (gid, p["product_id"], vid, c["edition"] or "", c["color"], c["attributes"],
                         1.0 if c["ready"] else 0.0, status,
                         json.dumps(c["unknown"]) if c["unknown"] else None,
                         "; ".join(c["reasons"]) or None)
@@ -331,9 +415,9 @@ def build_plan() -> dict:
 
         # drop plan rows whose source no longer exists (unless already applied)
         for vid, ex in existing.items():
-            if vid not in live and ex["status"] != "applied":
+            if vid not in live and not ex["new_variant_id"]:
                 conn.execute("DELETE FROM plan_variants WHERE id=?", (ex["id"],))
-        conn.execute("""DELETE FROM plan_products WHERE status != 'applied'
+        conn.execute("""DELETE FROM plan_products WHERE new_product_id IS NULL
                         AND id NOT IN (SELECT DISTINCT plan_product_id FROM plan_variants)""")
         recheck_conflicts(conn)
     return counts
@@ -346,7 +430,7 @@ def recheck_conflicts(conn) -> None:
                       AND unknown_terms IS NULL""")
     dups = conn.execute(
         """SELECT plan_product_id g, lower(edition) e, lower(color) c, lower(attributes) a
-           FROM plan_variants WHERE edition IS NOT NULL AND color IS NOT NULL AND attributes IS NOT NULL
+           FROM plan_variants WHERE edition != '' AND color IS NOT NULL AND attributes IS NOT NULL
            GROUP BY 1,2,3,4 HAVING COUNT(*) > 1""").fetchall()
     for d in dups:
         conn.execute(
@@ -372,8 +456,11 @@ def unknown_terms() -> list[dict]:
                 e["pids"].add(r["pid"])
                 if len(e["examples"]) < 3:
                     e["examples"].append(r["title"])
+    with db.connect() as conn:
+        rules = load_rules(conn)
     out = [{"term": t, "label": term_label(t), "count": len(e["pids"]), "examples": e["examples"],
-            "kinds": allowed_kinds(t), "suggestion": suggest(t)} for t, e in seen.items()]
+            "kinds": allowed_kinds(t), "suggestion": suggest(t), "prefill": prefill(t, rules)}
+           for t, e in seen.items()]
     out.sort(key=lambda x: (-x["count"], x["term"]))
     return out
 
@@ -382,11 +469,20 @@ def save_rule(term: str, kind: str, value: str = "") -> None:
     if kind not in ALL_KINDS:
         raise ValueError(f"unknown kind {kind!r}")
     term = term.strip().lower() if term.startswith("~") else norm(term)
-    if not term and not term.startswith("~format:"):
+    if not term:
         raise ValueError("empty term")
     value = (value or "").strip()
-    if kind in ("edition", "color", "attribute", "format", "default") and not value:
+    if kind in ("edition", "color", "attribute", "default") and not value:
         raise ValueError(f"{kind} rules need a value")
+    if kind == "segment":
+        try:
+            v = json.loads(value)
+        except ValueError:
+            raise ValueError("segment rule needs JSON value")
+        v = {k: str(v.get(k) or "").strip() for k in ("edition", "color", "attributes")}
+        if not any(v.values()):
+            raise ValueError("fill at least one of Edition / Color / Attributes")
+        value = json.dumps(v)
     with db.connect() as conn:
         conn.execute(
             """INSERT INTO term_rules(term,kind,value) VALUES (?,?,?)
@@ -409,7 +505,8 @@ def list_groups(flt: str = "all", q: str = "", limit: int = 25, offset: int = 0)
     having = {"all": "1=1",
               "review": "g.status='draft' AND SUM(v.status='needs_review') > 0",
               "ready": "g.status='draft' AND SUM(v.status='needs_review') = 0",
-              "approved": "g.status IN ('approved','applied')"}.get(flt, "1=1")
+              "approved": "g.status IN ('approved','applied')",
+              "unclassified": "g.category_id IS NULL"}.get(flt, "1=1")
     like = f"%{q.strip()}%"
     where = "WHERE (:q='' OR g.title LIKE :like OR g.vendor LIKE :like OR g.handle LIKE :like)"
     params = {"q": q.strip(), "like": like, "limit": limit, "offset": offset}
@@ -418,13 +515,14 @@ def list_groups(flt: str = "all", q: str = "", limit: int = 25, offset: int = 0)
             """SELECT COUNT(*) total,
                       SUM(g.status='draft' AND nr=0) ready,
                       SUM(g.status='draft' AND nr>0) review,
-                      SUM(g.status IN ('approved','applied')) approved
-               FROM (SELECT g.id, g.status, (SELECT COUNT(*) FROM plan_variants v
+                      SUM(g.status IN ('approved','applied')) approved,
+                      SUM(g.category_id IS NULL) unclassified
+               FROM (SELECT g.id, g.status, g.category_id, (SELECT COUNT(*) FROM plan_variants v
                      WHERE v.plan_product_id=g.id AND v.status='needs_review') nr
                      FROM plan_products g) g""").fetchone())
         groups = conn.execute(
-            f"""SELECT g.id, g.handle, g.title, g.vendor, g.status,
-                       COUNT(v.id) n, SUM(v.status='needs_review') nr
+            f"""SELECT g.id, g.handle, g.title, g.vendor, g.status, g.new_product_id, g.format, g.category_name,
+                       g.category_id, COUNT(v.id) n, SUM(v.status='needs_review') nr
                 FROM plan_products g JOIN plan_variants v ON v.plan_product_id=g.id
                 {where} GROUP BY g.id HAVING {having}
                 ORDER BY nr DESC, g.title LIMIT :limit OFFSET :offset""", params).fetchall()
@@ -436,7 +534,7 @@ def list_groups(flt: str = "all", q: str = "", limit: int = 25, offset: int = 0)
         for g in groups:
             vs = conn.execute(
                 """SELECT v.id, v.edition, v.color, v.attributes, v.status, v.reason, v.manual,
-                          sp.title source_title, sv.price, sv.inventory_quantity qty, sv.barcode
+                          v.source_product_id, sp.title source_title, sv.price, sv.inventory_quantity qty, sv.barcode
                    FROM plan_variants v
                    LEFT JOIN shopify_products sp ON sp.product_id=v.source_product_id
                    LEFT JOIN shopify_variants sv ON sv.variant_id=v.source_variant_id
@@ -451,14 +549,14 @@ def edit_variant(variant_id: int, fields: dict) -> None:
         row = conn.execute("SELECT * FROM plan_variants WHERE id=?", (variant_id,)).fetchone()
         if not row:
             raise LookupError("variant not found")
-        if row["status"] == "applied":
-            raise PermissionError("already applied")
+        if row["new_variant_id"]:
+            raise PermissionError("already created in Shopify")
         vals = {k: (fields.get(k, row[k]) or "").strip() for k in ("edition", "color", "attributes")}
         status = "ready" if all(vals.values()) else "needs_review"
         conn.execute(
             """UPDATE plan_variants SET edition=?, color=?, attributes=?, status=?, manual=1,
                unknown_terms=NULL, reason=?, updated_at=datetime('now') WHERE id=?""",
-            (vals["edition"] or None, vals["color"] or None, vals["attributes"] or None, status,
+            (vals["edition"], vals["color"] or None, vals["attributes"] or None, status,
              None if status == "ready" else "missing value", variant_id))
         conn.execute("UPDATE plan_products SET status='draft' WHERE id=? AND status='approved'",
                      (row["plan_product_id"],))
@@ -467,15 +565,17 @@ def edit_variant(variant_id: int, fields: dict) -> None:
 
 def set_group_approved(group_id: int, approve: bool) -> None:
     with db.connect() as conn:
-        g = conn.execute("SELECT status FROM plan_products WHERE id=?", (group_id,)).fetchone()
+        g = conn.execute("SELECT status, new_product_id FROM plan_products WHERE id=?", (group_id,)).fetchone()
         if not g:
             raise LookupError("group not found")
-        if g["status"] == "applied":
-            raise PermissionError("already applied")
+        if g["new_product_id"]:
+            raise PermissionError("already created in Shopify")
         if approve:
             bad = conn.execute(
                 "SELECT COUNT(*) FROM plan_variants WHERE plan_product_id=? AND status='needs_review'",
                 (group_id,)).fetchone()[0]
+            if not conn.execute("SELECT category_id FROM plan_products WHERE id=?", (group_id,)).fetchone()[0]:
+                raise ValueError("no category — fix in Shopify, sync, rebuild")
             if bad:
                 raise ValueError(f"{bad} variant(s) still need review")
             conn.execute("UPDATE plan_variants SET status='approved' WHERE plan_product_id=?", (group_id,))
@@ -484,3 +584,68 @@ def set_group_approved(group_id: int, approve: bool) -> None:
             conn.execute("UPDATE plan_variants SET status='ready' WHERE plan_product_id=? AND status='approved'",
                          (group_id,))
             conn.execute("UPDATE plan_products SET status='draft' WHERE id=?", (group_id,))
+
+
+# ── add / remove variants of a group ─────────────────────────────────
+
+def _drop_if_empty(conn, group_id: int) -> None:
+    conn.execute("""DELETE FROM plan_products WHERE id=? AND new_product_id IS NULL
+                    AND id NOT IN (SELECT DISTINCT plan_product_id FROM plan_variants)""", (group_id,))
+
+
+def move_variant(variant_id: int, group_id: Optional[int] = None, new_title: str = "") -> int:
+    """Move a plan variant into another group (same category only), or out into a new group of its own."""
+    with db.connect() as conn:
+        v = conn.execute("SELECT * FROM plan_variants WHERE id=?", (variant_id,)).fetchone()
+        if not v:
+            raise LookupError("variant not found")
+        src = conn.execute("SELECT * FROM plan_products WHERE id=?", (v["plan_product_id"],)).fetchone()
+        if v["new_variant_id"] or src["new_product_id"]:
+            raise PermissionError("already created in Shopify")
+        if group_id:
+            dst = conn.execute("SELECT * FROM plan_products WHERE id=?", (group_id,)).fetchone()
+            if not dst:
+                raise LookupError("target group not found")
+            if dst["new_product_id"]:
+                raise PermissionError("target already created in Shopify")
+            if dst["category_id"] != src["category_id"]:
+                raise ValueError("different category — products must share a category to be grouped")
+            gid = dst["id"]
+        else:
+            title = (new_title or "").strip()
+            if not title:
+                raise ValueError("new product title required")
+            handle = f"{slug(src['vendor'] or 'unknown')}-{slug(title)}" + (
+                f"-{slug(src['format'])}" if src["format"] else "")
+            if conn.execute("SELECT 1 FROM plan_products WHERE handle=?", (handle,)).fetchone():
+                raise ValueError(f"group {handle} already exists — move into it instead")
+            gid = conn.execute(
+                """INSERT INTO plan_products(handle,title,vendor,product_type,category_id,category_name,format)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (handle, title, src["vendor"], src["product_type"], src["category_id"],
+                 src["category_name"], src["format"])).lastrowid
+        conn.execute("UPDATE plan_variants SET plan_product_id=?, manual=1, "
+                     "status=CASE WHEN status='approved' THEN 'ready' ELSE status END, "
+                     "updated_at=datetime('now') WHERE id=?", (gid, variant_id))
+        for g in {src["id"], gid}:
+            conn.execute("UPDATE plan_products SET status='draft' WHERE id=? AND status='approved'", (g,))
+            conn.execute("UPDATE plan_variants SET status='ready' WHERE plan_product_id=? AND status='approved'", (g,))
+        _drop_if_empty(conn, src["id"])
+        recheck_conflicts(conn)
+        return gid
+
+
+def search_addable(group_id: int, q: str = "", limit: int = 15) -> list[dict]:
+    """Plan variants in the same category, from other groups, that could be added to this group."""
+    with db.connect() as conn:
+        g = conn.execute("SELECT category_id FROM plan_products WHERE id=?", (group_id,)).fetchone()
+        if not g:
+            raise LookupError("group not found")
+        rows = conn.execute(
+            """SELECT v.id, sp.title, sp.vendor, p.handle group_handle, v.edition, v.color, v.attributes
+               FROM plan_variants v JOIN plan_products p ON p.id=v.plan_product_id
+               JOIN shopify_products sp ON sp.product_id=v.source_product_id
+               WHERE p.id != ? AND p.category_id IS ? AND v.new_variant_id IS NULL AND p.new_product_id IS NULL
+                 AND (sp.title LIKE ? OR sp.vendor LIKE ?) ORDER BY sp.title LIMIT ?""",
+            (group_id, g["category_id"], f"%{q.strip()}%", f"%{q.strip()}%", limit)).fetchall()
+        return [dict(r) for r in rows]
