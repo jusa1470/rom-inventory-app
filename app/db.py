@@ -94,6 +94,17 @@ CREATE TABLE IF NOT EXISTS term_rules (
 CREATE INDEX IF NOT EXISTS idx_pv_plan   ON plan_variants(plan_product_id);
 CREATE INDEX IF NOT EXISTS idx_pv_source ON plan_variants(source_product_id);
 
+-- ── Ignored from the plan (e.g. gift cards: no variants needed) ───
+CREATE TABLE IF NOT EXISTS plan_ignored_products (
+  product_id TEXT PRIMARY KEY,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS plan_ignored_categories (
+  category_id   TEXT PRIMARY KEY,
+  category_name TEXT,
+  created_at    TEXT DEFAULT (datetime('now'))
+);
+
 -- ── Misc ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS sync_state (
   key   TEXT PRIMARY KEY,
@@ -125,7 +136,7 @@ def init_db() -> None:
         # migrate plan_variants created by an earlier version of the schema
         for table, additions in (
             ("plan_variants", (("unknown_terms", "TEXT"), ("reason", "TEXT"), ("manual", "INTEGER DEFAULT 0"),
-                               ("new_inventory_item_id", "TEXT"), ("qty_copied", "INTEGER"),
+                               ("new_inventory_item_id", "TEXT"), ("qty_copied", "INTEGER"), ("duplicate_of", "INTEGER"),
                                ("archived_at", "TEXT"))),
             ("plan_products", (("created_at_shopify", "TEXT"), ("new_status", "TEXT"), ("error", "TEXT"),
                                ("category_name", "TEXT"), ("format", "TEXT"), ("published_at", "TEXT"))),

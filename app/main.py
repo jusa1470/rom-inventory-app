@@ -202,6 +202,43 @@ def plan_addable(group_id: int, q: str = ""):
     return _guard(planner.search_addable, group_id, q)
 
 
+class IgnoreIn(BaseModel):
+    variant_ids: list[int]
+    scope: str = "product"
+
+
+class UnignoreIn(BaseModel):
+    product_id: str = ""
+    category_id: str = ""
+
+
+@app.post("/api/plan/ignore", dependencies=_plan)
+def plan_ignore(body: IgnoreIn):
+    _guard(planner.ignore_variants, body.variant_ids, body.scope)
+    return {"ok": True}
+
+
+@app.get("/api/plan/ignored", dependencies=_plan)
+def plan_ignored():
+    return planner.list_ignored()
+
+
+@app.post("/api/plan/unignore", dependencies=_plan)
+def plan_unignore(body: UnignoreIn):
+    return planner.unignore(body.product_id, body.category_id)
+
+
+@app.post("/api/plan/variants/{variant_id}/keep-duplicates", dependencies=_plan)
+def plan_keep_duplicates(variant_id: int):
+    return {"marked": _guard(planner.keep_duplicates, variant_id)}
+
+
+@app.post("/api/plan/variants/{variant_id}/unmark-duplicate", dependencies=_plan)
+def plan_unmark_duplicate(variant_id: int):
+    _guard(planner.unmark_duplicate, variant_id)
+    return {"ok": True}
+
+
 @app.post("/api/plan/groups/{group_id}/approve", dependencies=_plan)
 def plan_approve(group_id: int):
     _guard(planner.set_group_approved, group_id, True)

@@ -196,8 +196,10 @@ def _variant_input(src: dict, with_options: Optional[tuple] = None) -> dict:
 def create_group(client: ShopifyClient, location_id: str, group_id: int, publish: bool = False) -> None:
     with db.connect() as conn:
         g = dict(conn.execute("SELECT * FROM plan_products WHERE id=?", (group_id,)).fetchone())
-        pvs = [dict(r) for r in conn.execute(
+        allv = [dict(r) for r in conn.execute(
             "SELECT * FROM plan_variants WHERE plan_product_id=? ORDER BY edition, color, attributes", (group_id,))]
+    pvs = [v for v in allv if v["status"] != "duplicate"]
+    dups = [v for v in allv if v["status"] == "duplicate"]
     if g["status"] != "approved" and not g["new_product_id"]:
         raise ValueError("group is not approved")
     if not pvs or any(not (v["edition"] and v["color"] and v["attributes"]) for v in pvs):
@@ -206,8 +208,8 @@ def create_group(client: ShopifyClient, location_id: str, group_id: int, publish
         raise ValueError("group has duplicate variant combinations")
 
     # fresh pull of everything we copy (this is where "most recent quantities" comes from)
-    fresh = client.fetch_variants([v["source_variant_id"] for v in pvs])
-    missing = [v["source_variant_id"] for v in pvs if v["source_variant_id"] not in fresh]
+    fresh = client.fetch_variants([v["source_variant_id"] for v in allv])
+    missing = [v["source_variant_id"] for v in allv if v["source_variant_id"] not in fresh]
     if missing:
         raise ValueError(f"{len(missing)} source variant(s) no longer exist in Shopify — sync and rebuild the plan")
 
@@ -266,21 +268,26 @@ def create_group(client: ShopifyClient, location_id: str, group_id: int, publish
     for v in client.bulk_create_variants(pid, [c[1] for c in creates]):
         existing[_opt_key(v["selectedOptions"])] = v
 
-    items, rows = [], []
+    items, rows, new_of = [], [], {}
     for v in pvs:
         k = _key(v["edition"], v["color"], v["attributes"])
         new = existing.get(k)
         if not new:
             raise RuntimeError(f"variant {v['edition']} / {v['color']} / {v['attributes']} was not created")
-        qty = available_at(fresh[v["source_variant_id"]], location_id)
+        # stock = this listing + every duplicate listing merged into it
+        qty = available_at(fresh[v["source_variant_id"]], location_id) + sum(
+            available_at(fresh[d["source_variant_id"]], location_id) for d in dups if d["duplicate_of"] == v["id"])
         items.append((new["inventoryItem"]["id"], qty))
         rows.append((new["id"], new["inventoryItem"]["id"], qty, v["id"]))
+        new_of[v["id"]] = new["id"]
     client.set_quantities(location_id, items)
 
     with db.connect() as conn:
         conn.executemany(
             "UPDATE plan_variants SET new_variant_id=?, new_inventory_item_id=?, qty_copied=?, "
             "updated_at=datetime('now') WHERE id=?", rows)
+        for d in dups:      # old duplicate maps to the keeper's new variant
+            conn.execute("UPDATE plan_variants SET new_variant_id=? WHERE id=?", (new_of.get(d["duplicate_of"]), d["id"]))
         conn.execute("UPDATE plan_products SET created_at_shopify=?, error=NULL WHERE id=?", (_now(), group_id))
 
 
@@ -308,14 +315,17 @@ def archive_group(client: ShopifyClient, location_id: str, group_id: int) -> Non
     pending = [v for v in pvs if not v["archived_at"]]
     sources = sorted({v["source_product_id"] for v in pending})
 
-    # carry over sales/receipts that happened on the old listing since step 1
-    fresh = client.fetch_variants([v["source_variant_id"] for v in pending])
+    # carry over sales/receipts that happened on the old listings since step 1
+    # (a keeper's stock includes its merged duplicates)
+    fresh = client.fetch_variants([v["source_variant_id"] for v in pvs])
     deltas, rows = [], []
-    for v in pending:
-        node = fresh.get(v["source_variant_id"])
-        if not node:
+    for v in pvs:
+        if v["status"] == "duplicate":
             continue
-        cur = available_at(node, location_id)
+        members = [v] + [d for d in pvs if d["duplicate_of"] == v["id"]]
+        if any(m["source_variant_id"] not in fresh for m in members):
+            continue
+        cur = sum(available_at(fresh[m["source_variant_id"]], location_id) for m in members)
         delta = cur - (v["qty_copied"] or 0)
         if delta:
             deltas.append((v["new_inventory_item_id"], delta))

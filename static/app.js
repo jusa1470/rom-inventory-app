@@ -118,7 +118,7 @@ function renderPlan() {
     <div class="row"><button id="build">Rebuild plan</button><span id="sum" class="muted"></span></div>
     <div id="terms"></div>
     <div class="row"><select id="flt"><option value="review">Needs review</option><option value="ready">Ready</option>
-      <option value="approved">Approved</option><option value="unclassified">Unclassified</option><option value="all">All</option></select>
+      <option value="approved">Approved</option><option value="unclassified">Unclassified</option><option value="ignored">Ignored</option><option value="all">All</option></select>
       <input id="q" placeholder="Search…"/></div>
     <div id="groups"></div>
     <div class="pager"><span id="info"></span><button id="prev">←</button><button id="next">→</button></div></div>`);
@@ -140,7 +140,8 @@ function renderPlan() {
             <input data-f="attributes" placeholder="Attributes (comma)" value="${esc(pf.attributes)}"/>
             <button data-act="segment">Save</button><button class="ghost" data-act="title">Part of title</button>
             <button class="ghost" data-act="ignore">Ignore</button>`
-          : `<input data-f="value" placeholder="value"/><button data-act="default">Save</button>`}
+          : (t.term.startsWith('~ptype:') ? `<button data-act="yes">Yes, same</button><button class="ghost" data-act="no">No — they differ</button>`
+            : `<input data-f="value" placeholder="value"/><button data-act="default">Save</button>`)}
           ${t.suggestion ? `<button class="ghost" data-act="accept" title="${esc(JSON.stringify(t.suggestion))}">Accept suggestion</button>` : ''}
         </div></div>`;
     }).join('') + (terms.length > 20 ? `<p class="muted">+ ${terms.length - 20} more after these</p>` : '');
@@ -153,12 +154,26 @@ function renderPlan() {
         value: JSON.stringify({ edition: val('edition'), color: val('color'), attributes: val('attributes') }) }]));
       row.querySelector('[data-act=title]')?.addEventListener('click', () => send([{ term: t.term, kind: 'title' }]));
       row.querySelector('[data-act=ignore]')?.addEventListener('click', () => send([{ term: t.term, kind: 'ignore' }]));
+      row.querySelector('[data-act=yes]')?.addEventListener('click', () => send([{ term: t.term, kind: 'default', value: 'ok' }]));
+      row.querySelector('[data-act=no]')?.addEventListener('click', () => send([{ term: t.term, kind: 'default', value: 'mismatch' }]));
       row.querySelector('[data-act=default]')?.addEventListener('click', () => send([{ term: t.term, kind: 'default', value: val('value') }]));
     });
   }
 
   async function loadGroups() {
     const f = $('#flt').value, q = $('#q').value;
+    if (f === 'ignored') {
+      const ig = await api('/plan/ignored');
+      $('#groups').innerHTML = `<h3>Ignored products</h3>` + (ig.products.map((r) => `<div class="hit">${esc(r.title || r.product_id)}
+        <span class="muted">${esc(r.vendor)}</span> <button class="ghost" data-p="${esc(r.product_id)}">Restore</button></div>`).join('') || '<p class="muted">None</p>')
+        + `<h3>Ignored categories</h3>` + (ig.categories.map((r) => `<div class="hit">${esc(r.category_name || r.category_id)}
+        <button class="ghost" data-c="${esc(r.category_id)}">Restore</button></div>`).join('') || '<p class="muted">None</p>');
+      $('#groups').querySelectorAll('button[data-p],button[data-c]').forEach((b) => (b.onclick = async () => {
+        await post('/plan/unignore', { product_id: b.dataset.p || '', category_id: b.dataset.c || '' }); refresh();
+      }));
+      $('#info').textContent = ''; $('#prev').disabled = true; $('#next').disabled = true;
+      return;
+    }
     const d = await api(`/plan/groups?filter=${f}&q=${encodeURIComponent(q)}&limit=${LIMIT}&offset=${offset}`);
     const m = d.summary;
     $('#sum').textContent = `${m.total || 0} products · ${m.ready || 0} ready · ${m.review || 0} need review · ${m.approved || 0} approved · ${m.unclassified || 0} unclassified`;
@@ -168,15 +183,19 @@ function renderPlan() {
         <span class="tag ${g.format ? '' : 'bad'}">${esc(g.format || 'unclassified')}</span>
         <span class="muted">${esc(g.vendor)} · <span class="mono">${esc(g.handle)}</span></span></div>
         <div class="row">${locked ? '<span class="muted">created</span>' : `<button class="ghost" data-act="add">+ Add variant</button>
+        ${g.category_id ? '<button class="ghost" data-act="ignorecat" title="Ignore every product in this category">Ignore category</button>' : ''}
         ${g.status === 'draft' ? `<button data-act="approve" ${g.nr || !g.category_id ? 'disabled' : ''}>Approve</button>`
           : `<span class="muted">${g.status}</span> <button data-act="unapprove" class="ghost">Undo</button>`}`}</div></div>
         <div class="addbox"></div>
         <table><thead><tr><th>Edition</th><th>Color</th><th>Attributes</th><th>From</th><th>Price</th><th>Qty</th><th></th><th></th></tr></thead><tbody>
         ${g.variants.map((v) => `<tr data-v="${v.id}" class="${v.status === 'needs_review' ? 'warn' : ''}">
-          ${['edition', 'color', 'attributes'].map((k) => `<td><input data-k="${k}" value="${esc(v[k])}" ${locked ? 'disabled' : ''}/></td>`).join('')}
+          ${['edition', 'color', 'attributes'].map((k) => `<td><input data-k="${k}" value="${esc(v[k])}" ${locked || v.status === 'duplicate' ? 'disabled' : ''}/></td>`).join('')}
           <td>${esc(v.source_title)}</td><td>${v.price != null ? '$' + v.price.toFixed(2) : ''}</td><td>${v.qty ?? ''}</td>
-          <td class="muted">${esc(v.reason || '')}</td>
-          <td>${locked ? '' : `<button class="ghost" data-act="remove" title="Move to its own product">✕</button>`}</td></tr>`).join('')}</tbody></table></div>`;
+          <td class="muted">${v.status === 'duplicate' ? 'duplicate (merged into another)' : esc(v.reason || '')}</td>
+          <td>${locked ? '' : `${v.reason === 'duplicate variant combination' ? '<button data-act="keepdup" title="Keep this one; other identical variants are duplicate Shopify products">Keep · others are duplicates</button>' : ''}
+            ${v.status === 'duplicate' ? '<button class="ghost" data-act="undodup">Undo duplicate</button>' : ''}
+            <button class="ghost" data-act="ignore" title="Leave this product out of the plan (no variants needed)">Ignore</button>
+            <button class="ghost" data-act="remove" title="Move to its own product">✕</button>`}</td></tr>`).join('')}</tbody></table></div>`;
     }).join('') || '<p class="muted">Nothing here.</p>';
     $('#info').textContent = d.total ? `${offset + 1}–${Math.min(offset + LIMIT, d.total)} of ${d.total}` : '';
     $('#prev').disabled = offset === 0; $('#next').disabled = offset + LIMIT >= d.total;
@@ -202,6 +221,22 @@ function renderPlan() {
         inp.oninput = () => { clearTimeout(debounce); debounce = setTimeout(run, 250); };
         inp.focus(); run();
       });
+      gEl.querySelector('[data-act=ignorecat]')?.addEventListener('click', async () => {
+        if (!confirm('Ignore every product in this category?')) return;
+        try { await post('/plan/ignore', { variant_ids: [Number(gEl.querySelector('tr[data-v]').dataset.v)], scope: 'category' }); refresh(); }
+        catch (e) { alert(e.message); }
+      });
+      gEl.querySelectorAll('[data-act=ignore]').forEach((btn) => (btn.onclick = async () => {
+        try { await post('/plan/ignore', { variant_ids: [Number(btn.closest('tr').dataset.v)], scope: 'product' }); refresh(); }
+        catch (e) { alert(e.message); }
+      }));
+      gEl.querySelectorAll('[data-act=keepdup]').forEach((btn) => (btn.onclick = async () => {
+        if (!confirm('Mark the other identical variants as duplicates of this one? Their stock will be added to this variant when created.')) return;
+        try { await post(`/plan/variants/${btn.closest('tr').dataset.v}/keep-duplicates`); loadGroups(); } catch (e) { alert(e.message); }
+      }));
+      gEl.querySelectorAll('[data-act=undodup]').forEach((btn) => (btn.onclick = async () => {
+        try { await post(`/plan/variants/${btn.closest('tr').dataset.v}/unmark-duplicate`); loadGroups(); } catch (e) { alert(e.message); }
+      }));
       gEl.querySelectorAll('[data-act=remove]').forEach((btn) => (btn.onclick = async () => {
         const vid = btn.closest('tr').dataset.v;
         const title = prompt('Title for the new product:', gEl.querySelector('strong').textContent);
