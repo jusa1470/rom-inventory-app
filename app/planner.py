@@ -38,30 +38,56 @@ def slug(s: str) -> str:
     return norm(s).replace(" ", "-")
 
 
+FORMAT_SLUGS = {"music cds": "cd", "music cassette tapes": "cassette"}
+
+
+def format_slug(label: str) -> str:
+    return FORMAT_SLUGS.get(norm(label), slug(label))
+
+
 # ── title splitting ──────────────────────────────────────────────────
 
-_TRAIL = re.compile(r"\s*([\(\[])([^()\[\]]*)[\)\]]\s*$")
+_BRACKET = re.compile(r"[\(\[][^()\[\]]*[\)\]]")
 _DASH = re.compile(r"\s+[-–—]\s+")
 
 
+def _split_remainder(rem: str) -> list[tuple[str, str]]:
+    """Bracket groups and the loose text between/after them, each as its own segment."""
+    segs: list[tuple[str, str]] = []
+    pos = 0
+    for m in _BRACKET.finditer(rem):
+        loose = rem[pos:m.start()].strip()
+        if loose:
+            segs.append((" " + loose, loose))
+        segs.append((" " + m.group(0), m.group(0)[1:-1].strip()))
+        pos = m.end()
+    tail = rem[pos:].strip()
+    if tail:
+        segs.append((" " + tail, tail))
+    return segs
+
+
 def split_title(title: str) -> tuple[str, list[tuple[str, str]]]:
-    """Return (base_title, segments). Each segment is (original_text, inner_text).
-    Segments come from every ' - ' part after the first, plus trailing (...) / [...] groups."""
+    """Return (base_title, segments); each segment is (original_text, inner_text).
+    The base is the text before the first ' - ' and before the first bracket group that is not at the
+    very start (a leading '(…)' is part of the title). Everything after is a segment: every ' - ' part,
+    every (...) / [...] group, and loose text around them."""
     text = (title or "").strip()
-    brackets: list[tuple[str, str]] = []
-    while True:
-        m = _TRAIL.search(text)
-        if not m:
-            break
-        brackets.insert(0, (m.group(0).strip(), m.group(2).strip()))
-        text = text[:m.start()].rstrip()
-    segments: list[tuple[str, str]] = []
     parts = _DASH.split(text)
-    if len(parts) > 1:
-        text = parts[0].rstrip()
-        segments.extend((" - " + part, part) for part in parts[1:])
-    segments.extend(brackets)
-    return text, segments
+    head, dash_parts = parts[0], parts[1:]
+    segments: list[tuple[str, str]] = []
+    first = next((m for m in _BRACKET.finditer(head) if m.start() > 0), None)
+    if first:
+        segments.extend(_split_remainder(head[first.start():]))
+        head = head[:first.start()]
+    for part in dash_parts:
+        if _BRACKET.search(part):
+            sub = _split_remainder(part)
+            segments.append((" - " + sub[0][0].strip(), sub[0][1]))
+            segments.extend(sub[1:])
+        else:
+            segments.append((" - " + part, part))
+    return head.strip(), segments
 
 
 # ── rules ────────────────────────────────────────────────────────────
@@ -69,6 +95,27 @@ def split_title(title: str) -> tuple[str, list[tuple[str, str]]]:
 def load_rules(conn) -> dict[str, dict]:
     return {r["term"]: {"kind": r["kind"], "value": r["value"] or ""}
             for r in conn.execute("SELECT term, kind, value FROM term_rules")}
+
+
+_WEIGHT_UNITS = {"g", "gm", "gram", "grams"}
+
+
+def _builtin(words: list[str], i: int) -> Optional[tuple[str, str, int]]:
+    """Patterns that are always attributes: weight (180g, 180-g, 180 gram, 140gm…) and LP count
+    (2LP, 4 LPs, LP4, 4xLP…). Returns (kind, value, words consumed)."""
+    w = words[i]
+    nxt = words[i + 1] if i + 1 < len(words) else ""
+    m = re.fullmatch(r"(\d{2,3})(?:g|gm|gram|grams)", w)
+    if m:
+        return "attribute", f"{int(m.group(1))}g", 1
+    if re.fullmatch(r"\d{2,3}", w) and nxt in _WEIGHT_UNITS:
+        return "attribute", f"{int(w)}g", 2
+    m = re.fullmatch(r"(\d{1,2})x?lps?", w) or re.fullmatch(r"lps?(\d{1,2})", w)
+    if m:
+        return "attribute", f"{int(m.group(1))}Lp's", 1
+    if re.fullmatch(r"\d{1,2}x?", w) and nxt in ("lp", "lps"):
+        return "attribute", f"{int(w.rstrip('x'))}Lp's", 2
+    return None
 
 
 def parse_phrase(inner: str, rules: dict) -> tuple[list[tuple[str, str]], list[str]]:
@@ -79,6 +126,14 @@ def parse_phrase(inner: str, rules: dict) -> tuple[list[tuple[str, str]], list[s
     run: list[str] = []
     i = 0
     while i < len(words):
+        b = _builtin(words, i)
+        if b:
+            if run:
+                unknown.append(" ".join(run))
+                run = []
+            out.append((b[0], b[1]))
+            i += b[2]
+            continue
         for n in range(min(MAX_PHRASE, len(words) - i), 0, -1):
             r = rules.get(" ".join(words[i:i + n]))
             if r and r["kind"] in WORD_KINDS:
@@ -133,7 +188,7 @@ def format_of(p: dict, rules: dict) -> tuple[Optional[str], str, list[str], list
             unknown.append(k)
         elif r["value"] == "mismatch":      # user said they disagree: leave unclassified until fixed in Shopify
             return None, label, [f"category “{label}” and product type “{p.get('product_type')}” disagree — fix in Shopify"], []
-    return slug(label), label, [], unknown
+    return format_slug(label), label, [], unknown
 
 
 def _segment_rule(r: dict) -> dict:
@@ -258,38 +313,67 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
 
 _COLORS = {"black", "white", "red", "blue", "green", "yellow", "orange", "purple", "pink", "clear",
            "gold", "silver", "grey", "gray", "brown", "cream", "teal", "turquoise", "violet",
-           "maroon", "burgundy", "magenta", "lavender", "mint", "aqua", "tan", "beige", "ivory"}
+           "maroon", "burgundy", "magenta", "lavender", "mint", "aqua", "tan", "beige", "ivory", "zoetrope",
+           "picture disc"}
 _COLOR_MODS = {"baby", "light", "dark", "neon", "bright", "sky", "hot", "pastel", "opaque",
                "translucent", "transparent", "and", "marble", "marbled", "splatter"}
 _IGNORE = {"vinyl", "lp", "colored", "coloured", "color", "colour", "record", "records", "lps"}
 _EDITIONS = {"deluxe", "anniversary", "remastered", "reissue", "expanded", "special", "collectors",
-             "remaster", "edition", "version"}
-_ATTRS = {"import", "poster", "signed", "autographed", "picture", "disc", "gatefold", "exclusive",
-          "indie", "iex", "2lp", "3lp", "limited", "numbered", "booklet", "bonus", "obi"}
+             "remaster", "edition", "version", "indie", "iex", "indie exclusive", "limited", "exclusive"}
+_ATTRS = {"import", "poster", "signed", "autographed", "picture", "disc", "gatefold",
+          "2lp", "3lp", "numbered", "booklet", "bonus", "obi", "180g", "180gm", "180 g", "180 gm", "180 gram",
+          "180-gram", "140g", "140gm", "140 g", "140 gm", "gatefold lp jacket", "lithograph"}
+_ALIASES = {"iex": "Indie Exclusive"}
+_ORDINAL = re.compile(r"\d+(st|nd|rd|th)")
+_CLASSES = (("color", _COLORS), ("edition", _EDITIONS), ("attribute", _ATTRS))
 
 
 def smart_title(text: str) -> str:
-    """Title-case words; ordinals stay lowercase (20th), number+letters uppercase (2LP)."""
+    """Title-case words; ordinals stay lowercase (20th), number+letters uppercase (2LP), 'and' lowercase."""
     out = []
     for w in text.split():
-        if re.fullmatch(r"\d+(st|nd|rd|th)", w, re.I):
+        if _ORDINAL.fullmatch(w.lower()):
             out.append(w.lower())
         elif re.match(r"\d", w):
             out.append(w.upper())
+        elif w.lower() == "and":
+            out.append("and")
         else:
             out.append(w.capitalize())
     return " ".join(out)
 
 
+def _color_words(words: list[str]) -> Optional[list[str]]:
+    out, found, i = [], False, 0
+    while i < len(words):
+        two = " ".join(words[i:i + 2])
+        if len(words[i:i + 2]) == 2 and two in _COLORS:
+            out.append(two)
+            found = True
+            i += 2
+            continue
+        w = words[i]
+        if w in _COLORS:
+            found = True
+        elif w not in _COLOR_MODS:
+            return None
+        out.append(w)
+        i += 1
+    return out if found else None
+
+
 def _suggest_chunk(words: list[str]) -> Optional[dict]:
+    """A run of unexplained words → one suggested rule, only if all words belong to ONE class."""
     chunk = " ".join(words)
-    if any(w in _COLORS for w in words) and all(w in _COLORS | _COLOR_MODS for w in words):
+    cw = _color_words(words)
+    if cw is not None:
+        label = smart_title(" ".join(cw))
         return {"term": chunk, "kind": "color",
-                "value": smart_title(" ".join(w for w in words if w != "and")) + " Vinyl"}
-    if any(w in _EDITIONS for w in words):
-        return {"term": chunk, "kind": "edition", "value": smart_title(chunk)}
-    if any(w in _ATTRS for w in words):
-        return {"term": chunk, "kind": "attribute", "value": smart_title(chunk)}
+                "value": label if label.lower().endswith("picture disc") else label + " Vinyl"}
+    if all(w in _EDITIONS or _ORDINAL.fullmatch(w) for w in words) and any(w in _EDITIONS for w in words):
+        return {"term": chunk, "kind": "edition", "value": _ALIASES.get(chunk, smart_title(chunk))}
+    if all(w in _ATTRS for w in words) or chunk in _ATTRS:
+        return {"term": chunk, "kind": "attribute", "value": _ALIASES.get(chunk, smart_title(chunk))}
     return None
 
 
@@ -303,20 +387,51 @@ def suggest(term: str) -> Optional[list[dict]]:
         return [{"term": term, "kind": "default", "value": "Standard"}]
     if term.startswith("~ptype:"):
         return None     # never suggested: the user must answer yes or no
+    words = term.split()
     rules: list[dict] = []
-    chunk: list[str] = []
-    for w in term.split() + [None]:
-        if w is None or w in _IGNORE:
-            if chunk:
-                r = _suggest_chunk(chunk)
-                if not r:
-                    return None
-                rules.append(r)
-                chunk = []
-            if w is not None:
-                rules.append({"term": w, "kind": "ignore", "value": ""})
+    run: list[str] = []
+
+    def flush() -> bool:
+        nonlocal run
+        if run:
+            r = _suggest_chunk(run)
+            if not r:
+                return False
+            rules.append(r)
+            run = []
+        return True
+
+    i = 0
+    while i < len(words):
+        b = _builtin(words, i)
+        if b:                                   # weight / LP count are built in, no rule needed
+            if not flush():
+                return None
+            i += b[2]
+            continue
+        hit = None
+        for n in (4, 3, 2):
+            ph = " ".join(words[i:i + n])
+            if len(words[i:i + n]) == n:
+                kind = next((k for k, st in _CLASSES if ph in st), None)
+                if kind and kind != "color":    # multi-word colors are handled with their modifiers
+                    hit = (kind, ph, n)
+                    break
+        if hit:
+            if not flush():
+                return None
+            rules.append({"term": hit[1], "kind": hit[0], "value": _ALIASES.get(hit[1], smart_title(hit[1]))})
+            i += hit[2]
+            continue
+        if words[i] in _IGNORE:
+            if not flush():
+                return None
+            rules.append({"term": words[i], "kind": "ignore", "value": ""})
         else:
-            chunk.append(w)
+            run.append(words[i])
+        i += 1
+    if not flush():
+        return None
     return rules or None
 
 
@@ -363,6 +478,13 @@ def build_plan() -> dict:
     """(Re)classify every Shopify product into the plan. User-edited and
     approved rows are never touched."""
     with db.connect() as conn:
+        for old, new in (("music-cds", "cd"), ("music-cassette-tapes", "cassette")):   # renamed format slugs
+            conn.execute("UPDATE OR IGNORE term_rules SET term=? WHERE term=?", (f"~no-color:{new}", f"~no-color:{old}"))
+            for r in conn.execute("SELECT id, handle FROM plan_products WHERE new_product_id IS NULL AND handle LIKE ?",
+                                  (f"%-{old}",)).fetchall():
+                nh = r["handle"][:-len(old)] + new
+                if not conn.execute("SELECT 1 FROM plan_products WHERE handle=?", (nh,)).fetchone():
+                    conn.execute("UPDATE plan_products SET handle=? WHERE id=?", (nh, r["id"]))
         rules = load_rules(conn)
         ign_p = {r[0] for r in conn.execute("SELECT product_id FROM plan_ignored_products")}
         ign_c = {r[0] for r in conn.execute("SELECT category_id FROM plan_ignored_categories")}
@@ -643,7 +765,7 @@ def move_variant(variant_id: int, group_id: Optional[int] = None, new_title: str
             if not title:
                 raise ValueError("new product title required")
             handle = f"{slug(src['vendor'] or 'unknown')}-{slug(title)}" + (
-                f"-{slug(src['format'])}" if src["format"] else "")
+                f"-{format_slug(src['format'])}" if src["format"] else "")
             if conn.execute("SELECT 1 FROM plan_products WHERE handle=?", (handle,)).fetchone():
                 raise ValueError(f"group {handle} already exists — move into it instead")
             gid = conn.execute(
