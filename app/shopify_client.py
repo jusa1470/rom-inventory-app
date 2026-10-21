@@ -149,6 +149,17 @@ class ShopifyClient:
             if not page["pageInfo"]["hasNextPage"]:
                 return
             cursor = page["pageInfo"]["endCursor"]
+            
+    def all_product_ids(self) -> set[str]:
+        ids, cursor = set(), None
+        while True:
+            data = self._request(
+                "query($c:String){products(first:250,after:$c){nodes{id}pageInfo{hasNextPage endCursor}}}", {"c": cursor})
+            page = data["data"]["products"]
+            ids.update(n["id"] for n in page["nodes"])
+            if not page["pageInfo"]["hasNextPage"]:
+                return ids
+            cursor = page["pageInfo"]["endCursor"]
 
     @staticmethod
     def _since_filter(since: Optional[str]) -> Optional[str]:

@@ -63,6 +63,9 @@ def _run(client: ShopifyClient, mode: str) -> None:
 
         if mode == "full":
             _delete_missing(seen)
+        else:
+            _status["message"] = "Checking for deleted products…"
+            _delete_missing(client.all_product_ids())
         db.set_state("shopify_last_sync", started)
         _status["message"] = f"Done — {len(seen)} products"
     except Exception as e:

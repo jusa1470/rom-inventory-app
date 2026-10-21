@@ -34,8 +34,27 @@ def norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", s).strip()
 
 
-def slug(s: str) -> str:
-    return norm(s).replace(" ", "-")
+SYMBOLS = "&$+@%#"
+
+
+def sym_key(ch: str, text: str) -> str:
+    return f"~sym:{ch}|{(text or '').strip().lower()}"
+
+
+def _sym_rule(rules, ch: str, text: str) -> Optional[str]:
+    r = (rules or {}).get(sym_key(ch, text))
+    return r["value"] if r and r["kind"] == "default" and r["value"] else None
+
+
+def slug(s: str, rules: Optional[dict] = None) -> str:
+    t = fold(s).lower()
+    for ch in SYMBOLS:
+        if ch in t:
+            v = _sym_rule(rules, ch, s)
+            rep = "" if v in (None, "drop") else (f" {v.lower()} " if len(v) > 1 else v.lower())
+            t = t.replace(ch, rep)
+    t = re.sub(r"[^a-z0-9\s]", "", t)
+    return re.sub(r"\s+", "-", t.strip())
 
 
 FORMAT_SLUGS = {"music cds": "cd", "music cassette tapes": "cassette"}
@@ -48,8 +67,7 @@ def format_slug(label: str) -> str:
 # ── title splitting ──────────────────────────────────────────────────
 
 _BRACKET = re.compile(r"[\(\[][^()\[\]]*[\)\]]")
-_DASH = re.compile(r"\s+[-–—]\s+")
-
+_DASH = re.compile(r"\s+[-–—]\s*|\s*[-–—]\s+")   # dash with a space on at least one side
 
 def _split_remainder(rem: str) -> list[tuple[str, str]]:
     """Bracket groups and the loose text between/after them, each as its own segment."""
@@ -171,6 +189,14 @@ def is_excluded(title: str, tags_json: str) -> bool:
     return any(str(t).strip().lower() == "used" for t in tags)
 
 
+MEDIA_LABELS = {"vinyl records", "vinyl", "records", "music cds", "cds", "cd", "music cassette tapes", "cassette tapes", "cassettes", "cassette"}
+
+
+def is_media(p: dict) -> bool:
+    cat = (p.get("category_name") or "").split(">")[-1]
+    return norm(cat or p.get("product_type") or "") in MEDIA_LABELS
+
+
 def format_of(p: dict, rules: dict) -> tuple[Optional[str], str, list[str], list[str]]:
     """Format comes from the Shopify category (last path segment). Product type, if it differs
     from that, must be confirmed once per (category, type) pair. Returns (slug, label, reasons, unknown)."""
@@ -255,11 +281,8 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
     unknown += fmt_unknown
 
     editions = _uniq(editions)
-    if len(editions) > 1:
-        edition = None
-        reasons.append("multiple editions: " + ", ".join(editions))
-    elif editions:
-        edition = editions[0]
+    if editions:
+        edition = ", ".join(editions)
     else:
         r = rules.get(NO_EDITION)
         if r and r["kind"] == "default" and r["value"]:
@@ -274,7 +297,7 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
         reasons.append("multiple colors: " + ", ".join(colors))
     elif colors:
         color = colors[0]
-    elif ignored_only:
+    elif ignored_only and not (fmt and (rules.get(f"~no-color:{fmt}") or {}).get("value", "").strip().lower() == "none"):
         color = None
         reasons.append("color not stated (title has only generic descriptors)")
     elif fmt:
@@ -301,6 +324,11 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
     if n_variants > 1:
         reasons.append(f"source product has {n_variants} variants")
 
+    for txt in (p.get("vendor") or "", base):
+        for ch in SYMBOLS:
+            if ch in txt and not _sym_rule(rules, ch, txt):
+                unknown.append(sym_key(ch, txt))
+
     unknown = _uniq(unknown)
     ready = not unknown and not reasons and None not in (edition, color, attributes)
     return {
@@ -314,16 +342,16 @@ def classify(p: dict, rules: dict, n_variants: int = 1) -> dict:
 _COLORS = {"black", "white", "red", "blue", "green", "yellow", "orange", "purple", "pink", "clear",
            "gold", "silver", "grey", "gray", "brown", "cream", "teal", "turquoise", "violet",
            "maroon", "burgundy", "magenta", "lavender", "mint", "aqua", "tan", "beige", "ivory", "zoetrope",
-           "picture disc"}
-_COLOR_MODS = {"baby", "light", "dark", "neon", "bright", "sky", "hot", "pastel", "opaque",
-               "translucent", "transparent", "and", "marble", "marbled", "splatter"}
+           "picture disc", "copper", "emerald", "sapphire", "ruby", "opal", "pearl", "bronze", "platinum", "chrome", "brass"}
+_COLOR_MODS = {"crystal","baby", "light", "dark", "neon", "bright", "sky", "hot", "pastel", "opaque",
+               "translucent", "transparent", "and", "marble", "marbled", "splatter", "swirl", "smoke", "metallic"}
 _IGNORE = {"vinyl", "lp", "colored", "coloured", "color", "colour", "record", "records", "lps"}
 _EDITIONS = {"deluxe", "anniversary", "remastered", "reissue", "expanded", "special", "collectors",
-             "remaster", "edition", "version", "indie", "iex", "indie exclusive", "limited", "exclusive"}
+             "remaster", "edition", "version", "indie", "iex", "indie exclusive", "limited", "ltd", "exclusive", "stereo", "mono"}
 _ATTRS = {"import", "poster", "signed", "autographed", "picture", "disc", "gatefold",
           "2lp", "3lp", "numbered", "booklet", "bonus", "obi", "180g", "180gm", "180 g", "180 gm", "180 gram",
           "180-gram", "140g", "140gm", "140 g", "140 gm", "gatefold lp jacket", "lithograph"}
-_ALIASES = {"iex": "Indie Exclusive"}
+_ALIASES = {"iex": "Indie Exclusive", "ie": "Indie Exclusive"}
 _ORDINAL = re.compile(r"\d+(st|nd|rd|th)")
 _CLASSES = (("color", _COLORS), ("edition", _EDITIONS), ("attribute", _ATTRS))
 
@@ -367,7 +395,14 @@ def _suggest_chunk(words: list[str]) -> Optional[dict]:
     chunk = " ".join(words)
     cw = _color_words(words)
     if cw is not None:
-        label = smart_title(" ".join(cw))
+        hue = [w in _COLORS for w in cw]
+        if sum(hue) > 1:
+            n = sum(hue)
+            if not all(hue[:n]):
+                return None
+            label = smart_title(" & ".join(cw[:n]) + (" " + " ".join(cw[n:]) if cw[n:] else ""))
+        else:
+            label = smart_title(" ".join(cw))
         return {"term": chunk, "kind": "color",
                 "value": label if label.lower().endswith("picture disc") else label + " Vinyl"}
     if all(w in _EDITIONS or _ORDINAL.fullmatch(w) for w in words) and any(w in _EDITIONS for w in words):
@@ -385,7 +420,7 @@ def suggest(term: str) -> Optional[list[dict]]:
         return [{"term": term, "kind": "default", "value": "None"}]
     if term == NO_EDITION:
         return [{"term": term, "kind": "default", "value": "Standard"}]
-    if term.startswith("~ptype:"):
+    if term.startswith(("~ptype:", "~sym:")):
         return None     # never suggested: the user must answer yes or no
     words = term.split()
     rules: list[dict] = []
@@ -438,6 +473,9 @@ def suggest(term: str) -> Optional[list[dict]]:
 def term_label(term: str) -> str:
     if term.startswith("~no-color:"):
         return f"Color to use when none is stated ({term[10:]})"
+    if term.startswith("~sym:"):
+        ch, _, txt = term[5:].partition("|")
+        return f"“{txt}” contains “{ch}” — what should it be in the URL handle?"
     if term.startswith("~ptype:"):
         cat, _, pt = term[7:].partition("|")
         return f"Is product type “{pt}” the same as category “{cat}”? (confirm to proceed)"
@@ -449,7 +487,7 @@ def term_label(term: str) -> str:
 
 
 def allowed_kinds(term: str) -> list[str]:
-    if term.startswith(("~no-color:", "~ptype:")) or term in (NO_ATTRS, NO_EDITION):
+    if term.startswith(("~no-color:", "~ptype:", "~sym:")) or term in (NO_ATTRS, NO_EDITION):
         return ["default"]
     return ["segment", "title", "ignore"]
 
@@ -485,6 +523,12 @@ def build_plan() -> dict:
                 nh = r["handle"][:-len(old)] + new
                 if not conn.execute("SELECT 1 FROM plan_products WHERE handle=?", (nh,)).fetchone():
                     conn.execute("UPDATE plan_products SET handle=? WHERE id=?", (nh, r["id"]))
+        conn.execute("UPDATE OR IGNORE term_rules SET term='~sym:$|'||substr(term,9) WHERE term LIKE '~dollar:%'")
+        rules = load_rules(conn)
+        for r in conn.execute("SELECT id, handle, vendor, title, format FROM plan_products WHERE new_product_id IS NULL").fetchall():
+            nh = f"{slug(r['vendor'] or 'unknown', rules)}-{slug(r['title'], rules)}" + (f"-{format_slug(r['format'])}" if r["format"] else "")
+            if nh != r["handle"] and not conn.execute("SELECT 1 FROM plan_products WHERE handle=?", (nh,)).fetchone():
+                conn.execute("UPDATE plan_products SET handle=? WHERE id=?", (nh, r["id"]))   # re-slug existing groups
         rules = load_rules(conn)
         ign_p = {r[0] for r in conn.execute("SELECT product_id FROM plan_ignored_products")}
         ign_c = {r[0] for r in conn.execute("SELECT category_id FROM plan_ignored_categories")}
@@ -495,7 +539,7 @@ def build_plan() -> dict:
         for v in conn.execute("SELECT variant_id, product_id FROM shopify_variants"):
             variants[v["product_id"]].append(v["variant_id"])
         existing = {r["source_variant_id"]: r for r in conn.execute(
-            "SELECT id, source_variant_id, manual, status, new_variant_id FROM plan_variants")}
+            "SELECT id, plan_product_id, source_variant_id, manual, status, new_variant_id, edition, color, attributes FROM plan_variants")}
 
         live: set[str] = set()
         group_cache: dict[str, int] = {}
@@ -508,17 +552,17 @@ def build_plan() -> dict:
             if p["product_id"] in ign_p or (p["category_id"] and p["category_id"] in ign_c):
                 counts["ignored"] += 1
                 continue
-            if is_excluded(p["title"], p["tags"]):
+            if is_excluded(p["title"], p["tags"]) or not is_media(dict(p)):
                 counts["excluded_used"] += 1
                 continue
             c = classify(dict(p), rules, n_variants=len(vids))
-            handle = f"{slug(p['vendor'] or 'unknown')}-{slug(c['base'])}" + (f"-{c['format']}" if c["format"] else "")
+            handle = f"{slug(p['vendor'] or 'unknown', rules)}-{slug(c['base'], rules)}" + (f"-{c['format']}" if c["format"] else "")
             counts["products"] += 1
             gcat = p["category_id"] if c["format"] else None     # unclassified products never join a category
             for vid in vids:
                 live.add(vid)
                 ex = existing.get(vid)
-                if ex and (ex["manual"] or ex["status"] in FROZEN or ex["new_variant_id"]):
+                if ex and (ex["manual"] or ex["new_variant_id"]):
                     counts["skipped_frozen"] += 1
                     continue
                 gkey = f"{handle}|{gcat}"
@@ -545,6 +589,11 @@ def build_plan() -> dict:
                         1.0 if c["ready"] else 0.0, status,
                         json.dumps(c["unknown"]) if c["unknown"] else None,
                         "; ".join(c["reasons"]) or None)
+                if ex and ex["status"] == "approved":
+                    if (ex["plan_product_id"], ex["edition"], ex["color"], ex["attributes"]) == (gid, args[3], args[4], args[5]) and c["ready"]:
+                        continue
+                    conn.execute("UPDATE plan_products SET status='draft' WHERE id IN (?,?) AND new_product_id IS NULL",
+                                 (ex["plan_product_id"], gid))
                 if ex:
                     conn.execute(
                         """UPDATE plan_variants SET plan_product_id=?, source_product_id=?,
@@ -565,6 +614,13 @@ def build_plan() -> dict:
                         AND id NOT IN (SELECT DISTINCT plan_product_id FROM plan_variants)""")
         recheck_conflicts(conn)
     return counts
+
+
+def reset_group(group_id: int) -> None:
+    with db.connect() as conn:
+        conn.execute("UPDATE plan_variants SET manual=0, status='needs_review' WHERE plan_product_id=? AND new_variant_id IS NULL", (group_id,))
+        conn.execute("UPDATE plan_products SET status='draft' WHERE id=? AND new_product_id IS NULL", (group_id,))
+    build_plan()
 
 
 def recheck_conflicts(conn) -> None:
@@ -764,7 +820,7 @@ def move_variant(variant_id: int, group_id: Optional[int] = None, new_title: str
             title = (new_title or "").strip()
             if not title:
                 raise ValueError("new product title required")
-            handle = f"{slug(src['vendor'] or 'unknown')}-{slug(title)}" + (
+            handle = f"{slug(src['vendor'] or 'unknown', load_rules(conn))}-{slug(title, load_rules(conn))}" + (
                 f"-{format_slug(src['format'])}" if src["format"] else "")
             if conn.execute("SELECT 1 FROM plan_products WHERE handle=?", (handle,)).fetchone():
                 raise ValueError(f"group {handle} already exists — move into it instead")

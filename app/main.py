@@ -157,6 +157,12 @@ def plan_groups(filter: str = "all", q: str = "", limit: int = 25, offset: int =
     return planner.list_groups(filter, q, max(1, min(limit, 100)), max(0, offset))
 
 
+@app.post("/api/plan/groups/{group_id}/reset", dependencies=_plan)
+def plan_reset(group_id: int):
+    planner.reset_group(group_id)
+    return {"ok": True}
+
+
 @app.get("/api/plan/unknown-terms", dependencies=_plan)
 def plan_unknown():
     return planner.unknown_terms()

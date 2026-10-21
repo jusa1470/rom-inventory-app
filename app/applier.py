@@ -275,8 +275,7 @@ def create_group(client: ShopifyClient, location_id: str, group_id: int, publish
         if not new:
             raise RuntimeError(f"variant {v['edition']} / {v['color']} / {v['attributes']} was not created")
         # stock = this listing + every duplicate listing merged into it
-        qty = available_at(fresh[v["source_variant_id"]], location_id) + sum(
-            available_at(fresh[d["source_variant_id"]], location_id) for d in dups if d["duplicate_of"] == v["id"])
+        qty = available_at(fresh[v["source_variant_id"]], location_id)
         items.append((new["inventoryItem"]["id"], qty))
         rows.append((new["id"], new["inventoryItem"]["id"], qty, v["id"]))
         new_of[v["id"]] = new["id"]
@@ -322,7 +321,7 @@ def archive_group(client: ShopifyClient, location_id: str, group_id: int) -> Non
     for v in pvs:
         if v["status"] == "duplicate":
             continue
-        members = [v] + [d for d in pvs if d["duplicate_of"] == v["id"]]
+        members = [v]
         if any(m["source_variant_id"] not in fresh for m in members):
             continue
         cur = sum(available_at(fresh[m["source_variant_id"]], location_id) for m in members)

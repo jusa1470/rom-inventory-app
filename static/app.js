@@ -39,6 +39,7 @@ function renderLogin() {
 }
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const SYM_DEFAULT = { '&': 'and', '$': 's', '+': 'plus', '@': 'at', '%': 'percent', '#': 'number' };
 const PAGES = { products: renderProducts, plan: renderPlan, apply: renderApply, rules: renderRules, sync: renderSync };
 let pollTimer = null;
 
@@ -140,7 +141,8 @@ function renderPlan() {
             <input data-f="attributes" placeholder="Attributes (comma)" value="${esc(pf.attributes)}"/>
             <button data-act="segment">Save</button><button class="ghost" data-act="title">Part of title</button>
             <button class="ghost" data-act="ignore">Ignore</button>`
-          : (t.term.startsWith('~ptype:') ? `<button data-act="yes">Yes, same</button><button class="ghost" data-act="no">No — they differ</button>`
+          : (t.term.startsWith('~sym:') ? `<input data-f="rep" placeholder="replace with…" value="${esc(SYM_DEFAULT[t.term.slice(5, 6)] || '')}"/><button data-act="symrep">Replace</button><button class="ghost" data-act="symdrop">Remove from handle</button>`
+          : t.term.startsWith('~ptype:') ? `<button data-act="yes">Yes, same</button><button class="ghost" data-act="no">No — they differ</button>`
             : `<input data-f="value" placeholder="value"/><button data-act="default">Save</button>`)}
           ${t.suggestion ? `<button class="ghost" data-act="accept" title="${esc(JSON.stringify(t.suggestion))}">Accept suggestion</button>` : ''}
         </div></div>`;
@@ -154,6 +156,8 @@ function renderPlan() {
         value: JSON.stringify({ edition: val('edition'), color: val('color'), attributes: val('attributes') }) }]));
       row.querySelector('[data-act=title]')?.addEventListener('click', () => send([{ term: t.term, kind: 'title' }]));
       row.querySelector('[data-act=ignore]')?.addEventListener('click', () => send([{ term: t.term, kind: 'ignore' }]));
+      row.querySelector('[data-act=symrep]')?.addEventListener('click', () => { if (val('rep').trim()) send([{ term: t.term, kind: 'default', value: val('rep').trim() }]); });
+      row.querySelector('[data-act=symdrop]')?.addEventListener('click', () => send([{ term: t.term, kind: 'default', value: 'drop' }]));
       row.querySelector('[data-act=yes]')?.addEventListener('click', () => send([{ term: t.term, kind: 'default', value: 'ok' }]));
       row.querySelector('[data-act=no]')?.addEventListener('click', () => send([{ term: t.term, kind: 'default', value: 'mismatch' }]));
       row.querySelector('[data-act=default]')?.addEventListener('click', () => send([{ term: t.term, kind: 'default', value: val('value') }]));
@@ -183,6 +187,7 @@ function renderPlan() {
         <span class="tag ${g.format ? '' : 'bad'}">${esc(g.format || 'unclassified')}</span>
         <span class="muted">${esc(g.vendor)} · <span class="mono">${esc(g.handle)}</span></span></div>
         <div class="row">${locked ? '<span class="muted">created</span>' : `<button class="ghost" data-act="add">+ Add variant</button>
+          <button class="ghost" data-act="reset">Reset</button>
         ${g.category_id ? '<button class="ghost" data-act="ignorecat" title="Ignore every product in this category">Ignore category</button>' : ''}
         ${g.status === 'draft' ? `<button data-act="approve" ${g.nr || !g.category_id ? 'disabled' : ''}>Approve</button>`
           : `<span class="muted">${g.status}</span> <button data-act="unapprove" class="ghost">Undo</button>`}`}</div></div>
@@ -206,6 +211,10 @@ function renderPlan() {
       });
       gEl.querySelector('[data-act=unapprove]')?.addEventListener('click', async () => {
         await post(`/plan/groups/${id}/unapprove`); loadGroups();
+      });
+      gEl.querySelector('[data-act=reset]')?.addEventListener('click', async () => {
+        if (!confirm('Discard manual edits in this group and re-classify?')) return;
+        await post(`/plan/groups/${id}/reset`); loadGroups();
       });
       gEl.querySelector('[data-act=add]')?.addEventListener('click', () => {
         const box = gEl.querySelector('.addbox');
@@ -243,12 +252,40 @@ function renderPlan() {
         if (!title) return;
         try { await post(`/plan/variants/${vid}/move`, { new_title: title }); refresh(); } catch (e) { alert(e.message); }
       }));
-      gEl.querySelectorAll('tr[data-v] input').forEach((inp) => {
-        inp.onchange = async () => {
-          const body = {}; body[inp.dataset.k] = inp.value;
-          try { await api(`/plan/variants/${inp.closest('tr').dataset.v}`, { method: 'PATCH', body }); loadGroups(); }
-          catch (e) { alert(e.message); }
-        };
+      const dirty = new Set();
+      const saveRow = async (tr) => {
+        const body = {}; tr.querySelectorAll('input[data-k]').forEach((i) => { body[i.dataset.k] = i.value; });
+        await api(`/plan/variants/${tr.dataset.v}`, { method: 'PATCH', body });
+        dirty.delete(tr);
+      };
+      const refreshAll = () => {
+        gEl.querySelector('[data-act=saveall]')?.remove();
+        if (dirty.size > 1) {
+          gEl.querySelector('.gh .row').insertAdjacentHTML('afterbegin', `<button data-act="saveall">Save all (${dirty.size})</button>`);
+          gEl.querySelector('[data-act=saveall]').onclick = async () => {
+            try { for (const tr of [...dirty]) await saveRow(tr); loadGroups(); } catch (e) { alert(e.message); }
+          };
+        }
+      };
+      gEl.querySelectorAll('tr[data-v]').forEach((tr) => {
+        tr.querySelectorAll('input[data-k]').forEach((inp) => {
+          inp.oninput = () => {
+            dirty.add(tr);
+            if (!tr.querySelector('[data-act=save]')) {
+              const cell = tr.lastElementChild;
+              cell.insertAdjacentHTML('afterbegin', '<button data-act="save">Save</button> <button class="ghost" data-act="cancel">Cancel</button> ');
+              cell.querySelector('[data-act=save]').onclick = async () => {
+                try {
+                  await saveRow(tr);
+                  if (dirty.size) { tr.querySelector('[data-act=save]').remove(); tr.querySelector('[data-act=cancel]').remove(); refreshAll(); }
+                  else loadGroups();
+                } catch (e) { alert(e.message); }
+              };
+              cell.querySelector('[data-act=cancel]').onclick = () => loadGroups();
+            }
+            refreshAll();
+          };
+        });
       });
     });
   }
@@ -297,7 +334,7 @@ function renderApply() {
       <span class="tag ${g.archived === g.n ? 'ok' : ''}">old archived ${g.archived}/${g.n}</span>
       <span class="tag ${g.published_at ? 'ok' : ''}">${g.published_at ? 'on Online Store' : 'not published'}</span>
       ${g.created === g.n && !g.published_at ? '<button class="ghost" data-act="publish">Publish</button>' : ''}
-      ${!g.new_product_id ? '<button data-act="create">Create</button>' : g.created === g.n && g.archived < g.n ? '<button data-act="archive">Archive old</button>' : g.created < g.n ? '<button data-act="create">Resume</button>' : ''}</div></div>
+      ${!g.new_product_id ? '<button class="ghost" data-act="unapprove">Unapprove</button><button data-act="create">Create</button>' : g.created === g.n && g.archived < g.n ? '<button data-act="archive">Archive old</button>' : g.created < g.n ? '<button data-act="create">Resume</button>' : ''}</div></div>
       ${g.error ? `<div class="err">${esc(g.error)}</div>` : ''}
       <table><thead><tr><th>Variant</th><th>Old product</th><th>Old qty</th><th>Copied</th><th>New</th><th>Old</th></tr></thead><tbody>
       ${g.variants.map((v) => `<tr><td>${esc(v.edition)} | ${esc(v.color)} | ${esc(v.attributes)}</td><td>${esc(v.source_title)}</td>
@@ -307,6 +344,9 @@ function renderApply() {
     $('#prev').disabled = offset === 0; $('#next').disabled = offset + LIMIT >= d.total;
     page.querySelectorAll('.grp').forEach((gEl) => {
       const id = Number(gEl.dataset.id);
+      gEl.querySelector('[data-act=unapprove]')?.addEventListener('click', async () => {
+        try { await post(`/plan/groups/${id}/unapprove`); loadSummary(); loadGroups(); } catch (e) { alert(e.message); }
+      });
       gEl.querySelector('[data-act=create]')?.addEventListener('click', run('create', [id]));
       gEl.querySelector('[data-act=archive]')?.addEventListener('click', run('archive', [id]));
       gEl.querySelector('[data-act=publish]')?.addEventListener('click', run('publish', [id]));
