@@ -27,3 +27,8 @@ def _suggest_chunk(words: list[str]) -> Optional[dict]:
 '''
 s = s.replace(old, new)
 open(p, "w").write(s)
+
+
+export TEST_SHOPIFY_STORE=your-test-store.myshopify.com
+export TEST_SHOPIFY_TOKEN=shpat_xxx
+python push_plan_to_shopify.py --products plan_products.csv --variants plan_variants.csv --limit 25 --test --apply
