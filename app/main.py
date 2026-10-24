@@ -1,5 +1,6 @@
 import secrets
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -8,10 +9,18 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import vault
+from app import db, vault
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-app = FastAPI()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.init_db()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 # In-memory state: decrypted credentials live only while the app runs.
 _creds: dict | None = None
