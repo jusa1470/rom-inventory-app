@@ -6,5 +6,6 @@ credentials.json
 .venv/
 .secret_key
 .sessions/
+.vscode/
 
 shopify_token.py

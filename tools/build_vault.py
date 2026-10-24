@@ -1,8 +1,10 @@
 """Run by the app owner only. Creates vault.enc from credentials.json.
 
 credentials.json:
-{"shopify_store": "...", "shopify_token": "...",
- "webami_username": "...", "webami_password": "..."}
+{
+    "shopify_store": "...", "shopify_token": "...",
+    "test_shopify_store": "...", "test_shopify_token": "..."
+}
 
 Usage: python tools/build_vault.py
 """
