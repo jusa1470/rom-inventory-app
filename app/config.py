@@ -1,8 +1,10 @@
 import os
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH  = os.path.join(BASE_DIR, "inventory.db")
+BASE_DIR = Path(__file__).resolve().parent.parent
+DB_PATH = Path(os.environ.get("RECORDSYNC_DB", BASE_DIR / "inventory.db"))
 
 DEFAULT_API_VERSION = "2025-01"
-SHOPFY_PAGE_SIZE = 25
+SHOPIFY_PAGE_SIZE = 10
+SHOPIFY_VARIANT_PAGE_SIZE = 10
 DEFAULT_PAGE_SIZE = 50

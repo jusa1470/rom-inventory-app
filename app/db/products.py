@@ -1,134 +1,111 @@
 from typing import Optional
 
-from app.db.connection import _row, _rows, _sid, get_conn
-from app.db.db import _img_key
+from app.db.connection import get_conn, row, rows, strip_gid, transaction
 
 
-def upsert_product(p: dict) -> None:
-    conn = get_conn()
-    pid = _sid(p.get("id") or p.get("product_id") or "")
+def _mf(node: dict, key: str) -> Optional[str]:
+    return (node.get(key) or {}).get("value")
+
+
+def _upsert(conn, table: str, pk: str, data: dict) -> None:
+    cols = ", ".join(data)
+    marks = ", ".join(f":{k}" for k in data)
+    updates = ", ".join(f"{k}=excluded.{k}" for k in data if k != pk)
+    conn.execute(
+        f"INSERT INTO {table} ({cols}) VALUES ({marks}) "
+        f"ON CONFLICT({pk}) DO UPDATE SET {updates}",
+        data,
+    )
+
+
+def _save_variant(conn, product_id: str, v: dict) -> str:
+    inv = v.get("inventoryItem") or {}
+    weight = (inv.get("measurement") or {}).get("weight") or {}
+    variant_id = strip_gid(v["id"])
+    _upsert(conn, "shopify_variants", "variant_id", {
+        "variant_id": variant_id,
+        "product_id": product_id,
+        "title": v.get("title"),
+        "barcode": v.get("barcode"),
+        "sku": v.get("sku"),
+        "upc": _mf(v, "upc"),
+        "description": _mf(v, "description"),
+        "release_date": _mf(v, "release_date"),
+        "variant_tags": _mf(v, "variant_tags"),
+        "price": v.get("price"),
+        "cost": (inv.get("unitCost") or {}).get("amount"),
+        "taxable": int(bool(v.get("taxable", True))),
+        "inventory_item_id": strip_gid(inv.get("id")),
+        "inventory_quantity": v.get("inventoryQuantity") or 0,
+        "weight": weight.get("value"),
+        "weight_unit": weight.get("unit"),
+    })
+    conn.execute("DELETE FROM shopify_images WHERE variant_id=?", (variant_id,))
+    for pos, m in enumerate((v.get("media") or {}).get("nodes", [])):
+        url = ((m.get("preview") or {}).get("image") or {}).get("url")
+        if url:
+            conn.execute(
+                "INSERT INTO shopify_images (variant_id, media_id, url, position) "
+                "VALUES (?, ?, ?, ?)",
+                (variant_id, strip_gid(m.get("id")), url, pos),
+            )
+    return variant_id
+
+
+def save_product(p: dict) -> None:
+    """Upsert one Shopify product node with its variants and variant images."""
+    product_id = strip_gid(p["id"])
     cat = p.get("category") or {}
-
-    existing = conn.execute(
-        "SELECT * FROM shopify_products WHERE product_id=?", (pid,)).fetchone()
-
-    def _val(key, transform=None, default=None):
-        if key in p:
-            v = p[key]
-            return transform(v) if transform and v is not None else v
-        if existing is not None:
-            return existing[key] if key in existing.keys() else default
-        return default
-
-    title    = _val("title")
-    vendor   = _val("vendor")
-    status   = _val("status")
-    ptype    = p.get("productType") if "productType" in p else _val("product_type")
-    tags_raw = p.get("tags") if "tags" in p else None
-    if tags_raw is not None:
-        tags = ",".join(tags_raw) if isinstance(tags_raw, list) else tags_raw
-    else:
-        tags = existing["tags"] if existing is not None else None
-    handle = _val("handle")
-    cat_id = _sid(cat.get("id") or "") if isinstance(cat, dict) and cat else (_val("category_id"))
-    cat_name = cat.get("name") if isinstance(cat, dict) and cat else _val("category_name")
-    upc    = _val("upc")
-    genres = _val("genres")
-
-    conn.execute(
-        """INSERT INTO shopify_products
-           (product_id,title,vendor,status,product_type,tags,handle,
-            category_id,category_name,upc,genres,last_synced)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-           ON CONFLICT(product_id) DO UPDATE SET
-             title=excluded.title, vendor=excluded.vendor, status=excluded.status,
-             product_type=excluded.product_type, tags=excluded.tags, handle=excluded.handle,
-             category_id=excluded.category_id, category_name=excluded.category_name,
-             upc=excluded.upc, genres=excluded.genres,
-             last_synced=datetime('now')""",
-        (pid, title, vendor, status, ptype, tags, handle, cat_id, cat_name, upc, genres),
-    )
-    conn.commit()
+    with transaction() as conn:
+        _upsert(conn, "shopify_products", "product_id", {
+            "product_id": product_id,
+            "title": p.get("title"),
+            "vendor": p.get("vendor"),
+            "status": p.get("status"),
+            "product_type": p.get("productType"),
+            "tags": ",".join(p.get("tags") or []),
+            "handle": p.get("handle"),
+            "category_id": strip_gid(cat.get("id")),
+            "category_name": cat.get("name"),
+            "genres": _mf(p, "genres"),
+            "type": _mf(p, "type"),
+        })
+        conn.execute(
+            "UPDATE shopify_products SET last_synced=datetime('now') WHERE product_id=?",
+            (product_id,))
+        keep = [_save_variant(conn, product_id, v)
+                for v in (p.get("variants") or {}).get("nodes", [])]
+        marks = ",".join("?" * len(keep))
+        conn.execute(
+            f"DELETE FROM shopify_variants WHERE product_id=?"
+            f"{f' AND variant_id NOT IN ({marks})' if keep else ''}",
+            [product_id, *keep],
+        )
 
 
-def upsert_variant(product_id: str, v: dict) -> None:
-    conn = get_conn()
-    inv      = v.get("inventoryItem") or {}
-    cost_obj = inv.get("unitCost") or {}
-    meas     = inv.get("measurement") or {}
-    wt       = meas.get("weight") or {}
-    weight      = wt.get("value")   or v.get("weight")
-    weight_unit = wt.get("unit")    or v.get("weightUnit") or v.get("weight_unit")
-    conn.execute(
-        """INSERT INTO shopify_variants
-           (variant_id,product_id,title,barcode,sku,upc,description,
-            release_date,variant_tags,price,cost,inventory_item_id,
-            inventory_quantity,weight,weight_unit)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(variant_id) DO UPDATE SET
-             price=excluded.price, cost=excluded.cost,
-             inventory_item_id=excluded.inventory_item_id,
-             inventory_quantity=excluded.inventory_quantity,
-             weight=excluded.weight, weight_unit=excluded.weight_unit""",
-        (
-            _sid(v.get("id") or v.get("variant_id") or ""),
-            product_id,
-            v.get("title"),
-            v.get("barcode"),
-            v.get("sku"),
-            v.get("upc"),
-            v.get("description"),
-            v.get("release_date"),
-            v.get("variant_tags"),
-            v.get("price"),
-            cost_obj.get("amount") if cost_obj else v.get("cost"),
-            _sid(inv.get("id") or v.get("inventory_item_id") or ""),
-            v.get("inventoryQuantity") or v.get("inventory_quantity") or 0,
-            weight,
-            weight_unit,
-        ),
-    )
-    conn.commit()
-
-
-def upsert_image(product_id: str, media_id: str, url: str, position: int) -> None:
-    conn = get_conn()
-    key = _img_key(url)
-    if key:
-        exists = conn.execute(
-            "SELECT 1 FROM shopify_images WHERE product_id=? AND LOWER(url) LIKE ?",
-            (product_id, f'%{key}')).fetchone()
-        if exists:
-            return
-    conn.execute(
-        """INSERT INTO shopify_images (product_id,media_id,url,position)
-           VALUES (?,?,?,?)
-           ON CONFLICT(product_id, media_id) DO NOTHING""",
-        (product_id, media_id, url, position),
-    )
-    conn.commit()
-
-
-def clear_images(product_id: str) -> None:
-    conn = get_conn()
-    conn.execute("DELETE FROM shopify_images WHERE product_id=?", (product_id,))
-    conn.commit()
+def _attach_images(conn, variants: list[dict]) -> None:
+    if not variants:
+        return
+    ids = [v["variant_id"] for v in variants]
+    by_variant = {i: [] for i in ids}
+    marks = ",".join("?" * len(ids))
+    for r in conn.execute(
+        f"SELECT * FROM shopify_images WHERE variant_id IN ({marks}) ORDER BY position", ids):
+        by_variant[r["variant_id"]].append(dict(r))
+    for v in variants:
+        v["images"] = by_variant[v["variant_id"]]
 
 
 def get_product_detail(product_id: str) -> Optional[dict]:
     conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM shopify_products WHERE product_id=?", (product_id,)).fetchone()
-    if not row:
+    product = row(conn.execute(
+        "SELECT * FROM shopify_products WHERE product_id=?", (product_id,)).fetchone())
+    if not product:
         return None
-    product = dict(row)
-    product["product_id"] = product["product_id"]   # backward-compat alias
-    product["variants"] = _rows(conn.execute(
+    product["variants"] = rows(conn.execute(
         "SELECT * FROM shopify_variants WHERE product_id=? ORDER BY rowid",
         (product_id,)).fetchall())
-    product["images"] = _rows(conn.execute(
-        "SELECT * FROM shopify_images WHERE product_id=? ORDER BY position",
-        (product_id,)).fetchall())
+    _attach_images(conn, product["variants"])
     return product
 
 
@@ -138,53 +115,33 @@ def count_products() -> int:
 
 def list_products(search: str = "", page: int = 1, per_page: int = 50) -> dict:
     conn = get_conn()
-    conditions = []
-    params = []
-
+    where, params = "", []
     if search:
-        conditions.append("(sp.title LIKE ? OR sp.vendor LIKE ? OR sp.upc LIKE ?)")
-        s = f"%{search}%"
-        params.extend([s, s, s])
+        like = f"%{search}%"
+        where = """WHERE title LIKE ? OR vendor LIKE ? OR product_id IN (
+            SELECT product_id FROM shopify_variants
+            WHERE upc LIKE ? OR barcode LIKE ? OR sku LIKE ?)"""
+        params = [like] * 5
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    joins = f"""
-        FROM shopify_products sp
-        LEFT JOIN shopify_variants sv ON sv.product_id = sp.product_id
-        LEFT JOIN shopify_images si
-            ON si.product_id = sp.product_id AND si.position = 0
-        {where}
-    """
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM shopify_products {where}", params).fetchone()[0]
+    items = rows(conn.execute(
+        f"SELECT * FROM shopify_products {where} "
+        f"ORDER BY title COLLATE NOCASE, product_id LIMIT ? OFFSET ?",
+        [*params, per_page, (max(page, 1) - 1) * per_page]).fetchall())
 
-    count_row = conn.execute(
-        f"SELECT COUNT(*) FROM (SELECT DISTINCT sp.product_id {joins})",
-        params,
-    ).fetchone()
-    total = count_row[0] if count_row else 0
-
-    offset = (page - 1) * per_page
-    rows = conn.execute(
-        f"""
-        SELECT
-            sp.product_id, sp.title, sp.vendor, sp.status,
-            sp.product_type, sp.tags, sp.category_name, sp.upc, sp.genres,
-            MAX(sv.variant_id) AS variant_id,
-            MAX(sv.price) AS price,
-            MAX(sv.cost) AS cost,
-            MAX(sv.inventory_quantity) AS inventory_quantity,
-            MAX(si.url) AS image_url
-        {joins}
-        GROUP BY sp.product_id
-        ORDER BY sp.title ASC
-        LIMIT ? OFFSET ?
-        """,
-        params + [per_page, offset],
-    ).fetchall()
-
-    return {
-        "items": _rows(rows),
-        "total": total,
-    }
-
-
-
-
+    if items:
+        ids = [p["product_id"] for p in items]
+        marks = ",".join("?" * len(ids))
+        variants = rows(conn.execute(
+            f"SELECT * FROM shopify_variants WHERE product_id IN ({marks}) ORDER BY rowid",
+            ids).fetchall())
+        _attach_images(conn, variants)
+        by_product = {i: [] for i in ids}
+        for v in variants:
+            by_product[v["product_id"]].append(v)
+        for p in items:
+            p["variants"] = by_product[p["product_id"]]
+            p["image_url"] = next(
+                (img["url"] for v in p["variants"] for img in v["images"]), None)
+    return {"items": items, "total": total}
