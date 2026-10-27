@@ -1,5 +1,6 @@
-import logging
 from datetime import datetime, timezone
+import logging
+import time
 
 from app import config, db
 from app.jobs.tracker import is_cancelled, update
@@ -7,7 +8,7 @@ from app.shopify import ShopifyClient
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-PROGRESS_EVERY: int = 10
+PROGRESS_EVERY: int = 5
 
 
 def run_shopify_sync(job_id: str, store: str, token: str, full: bool = False) -> dict:
@@ -39,7 +40,13 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
 
     since = None if full else cfg.get("last_shopify_sync")
     query = f"updated_at:>'{since}'" if since else None
-    update(job_id, message="Syncing products…")
+    try:
+        total = client.count_products(query)
+    except Exception:
+        logger.warning("Could not count products", exc_info=True)
+        total = 0
+    update(job_id, total=total, message="Syncing products…")
+    t0: float = time.monotonic()
 
     for node in client.iter_all_products(cfg, query):
         if is_cancelled(job_id):
@@ -52,7 +59,7 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
             logger.exception("Error saving product %s", node.get("id"))
         done = synced + errors
         if done % PROGRESS_EVERY == 0:
-            update(job_id, progress=done, message=f"Synced {synced} products…")
+            update(job_id, progress=done, message=f"Synced {done} of {total or '?'} products…")
 
     if is_cancelled(job_id):
         status = "cancelled"
@@ -66,6 +73,7 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
     if status == "done":
         db.upsert_config(last_shopify_sync=started)
 
+    logger.info("Shopify sync %s: %d products in %.1fs", status, synced, time.monotonic() - t0)
     db.log_sync("shopify_sync", status, f"synced:{synced} errors:{errors}")
     update(job_id, progress=synced + errors,
            message=f"{status.capitalize()} - {synced} products synced, {errors} errors")

@@ -1,15 +1,16 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
-
-import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+import logging
+from pathlib import Path
+import uvicorn
 
 from app import auth, db
 from app.routes import products_api, settings_api, sync_api
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
@@ -34,4 +35,4 @@ def spa(path: str):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)

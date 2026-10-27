@@ -1,6 +1,45 @@
+import json
 from typing import Optional
 
 from app.db.connection import get_conn, row, rows, strip_gid, transaction
+
+
+SORT_COLUMNS: dict[str, str] = {
+    "title": "title COLLATE NOCASE",
+    "vendor": "vendor COLLATE NOCASE",
+    "status": "status",
+    "category": "category_name COLLATE NOCASE",
+    "type": "type COLLATE NOCASE",
+    "genres": "genres COLLATE NOCASE",
+    "tags": "tags COLLATE NOCASE",
+    "variants": "(SELECT COUNT(*) FROM shopify_variants v "
+                "WHERE v.product_id = shopify_products.product_id)",
+    "price": "(SELECT MIN(CAST(v.price AS REAL)) FROM shopify_variants v "
+             "WHERE v.product_id = shopify_products.product_id)",
+    "qty": "(SELECT COALESCE(SUM(v.inventory_quantity), 0) FROM shopify_variants v "
+           "WHERE v.product_id = shopify_products.product_id)",
+}
+TEXT_FILTERS: dict[str, str] = {"title": "title", "vendor": "vendor"}
+VALUE_FILTERS: dict[str, str] = {"status": "status", "category": "category_name", "type": "type"}
+LIST_FILTERS: dict[str, str] = {"genres": "genres", "tags": "tags"}
+
+
+def split_list(value: Optional[str]) -> list[str]:
+    """Genres/tags arrive as a JSON array or a comma list; return unique clean items."""
+    if not value:
+        return []
+    text = value.strip()
+    try:
+        parsed = json.loads(text) if text.startswith("[") else None
+    except ValueError:
+        parsed = None
+    raw = parsed if isinstance(parsed, list) else text.split(",")
+    items: dict[str, None] = {}
+    for item in raw:
+        s = str(item).strip().strip('"')
+        if s:
+            items.setdefault(s, None)
+    return list(items)
 
 
 def _mf(node: dict, key: str) -> Optional[str]:
@@ -47,7 +86,7 @@ def _save_variant(conn, product_id: str, v: dict) -> str:
             conn.execute(
                 "INSERT INTO shopify_images (variant_id, media_id, url, position) "
                 "VALUES (?, ?, ?, ?)",
-                (variant_id, strip_gid(m.get("id")), url, pos),
+                (variant_id, strip_gid(m.get("id")), url, 0),
             )
     return variant_id
 
@@ -67,7 +106,7 @@ def save_product(p: dict) -> None:
             "handle": p.get("handle"),
             "category_id": strip_gid(cat.get("id")),
             "category_name": cat.get("name"),
-            "genres": _mf(p, "genres"),
+            "genres": ",".join(split_list(_mf(p, "genres"))),
             "type": _mf(p, "type"),
         })
         conn.execute(

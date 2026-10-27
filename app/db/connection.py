@@ -1,4 +1,3 @@
-from _thread import _local
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -13,6 +12,7 @@ def _make_conn() -> sqlite3.Connection:
     conn: sqlite3.Connection = sqlite3.connect(config.DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 

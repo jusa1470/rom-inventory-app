@@ -45,7 +45,7 @@ fragment VariantFields on ProductVariant {
   	description: metafield(namespace: $descriptionNamespace, key: $descriptionKey) { value }
   	release_date: metafield(namespace: $releaseDateNamespace, key: $releaseDateKey) { value }
   	variant_tags: metafield(namespace: $variantTagsNamespace, key: $variantTagsKey) { value }
-  	media(first: 3) { nodes { id preview { image { url } } } }
+  	media(first: 1) { nodes { id preview { image { url } } } }
   	inventoryItem {
 		id
 		unitCost { amount }
@@ -84,3 +84,7 @@ query MoreVariants($id: ID!, $after: String, $variantFirst: Int!, __VARS__) {
 """.replace("__VARS__", var_defs(VARIANT_METAFIELDS)) + VARIANT_FIELDS
 
 Q_LOCATIONS: str = "query { locations(first: 10) { nodes { id name isPrimary } } }"
+
+Q_PRODUCTS_COUNT: str = (
+    "query($query: String) { productsCount(query: $query, limit: null) { count } }"
+)

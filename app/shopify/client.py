@@ -10,6 +10,7 @@ from app.shopify.queries import (
     Q_LOCATIONS,
     Q_MORE_VARIANTS,
     Q_PRODUCTS,
+    Q_PRODUCTS_COUNT,
     VARIANT_METAFIELDS,
     vars_from_cfg,
 )
@@ -58,10 +59,20 @@ class ShopifyClient:
                 (body.get("extensions") or {}).get("cost", {}).get("throttleStatus", {})
             )
             available = throttle.get("currentlyAvailable", 1000)
+            cost = (body.get("extensions") or {}).get("cost", {})
+            available = throttle.get("currentlyAvailable", 1000)
             restore = throttle.get("restoreRate", 50)
-            if available < 150:
-                wait: float = max(1.0, (150 - available) / max(restore, 1))
-                logger.info("Shopify bucket low (%s) - sleeping %.1fs", available, wait)
+            requested = cost.get("requestedQueryCost", 0)
+            logger.debug(
+                "Shopify cost: requested %s, actual %s, available %s",
+                requested, cost.get("actualQueryCost"), available,
+            )
+            # The next request is rejected unless the bucket holds its requested cost.
+            if available < requested:
+                wait = (requested - available) / max(restore, 1)
+                logger.info(
+                    "Shopify bucket low (%s < %s) - sleeping %.1fs", available, requested, wait
+                )
                 time.sleep(wait)
 
             errors = body.get("errors", [])
@@ -78,7 +89,11 @@ class ShopifyClient:
 
         raise RuntimeError("Shopify API rate limit exceeded after retries")
 
-        # ── Products ──────────────────────────────────────────────────────────────
+    # ── Products ──────────────────────────────────────────────────────────────
+    
+    def count_products(self, query: Optional[str] = None) -> int:
+        data = self.gql(Q_PRODUCTS_COUNT, {"query": query})
+        return int((data.get("productsCount") or {}).get("count") or 0)
 
     def _fetch_remaining_variants(
         self, product_id: str, after: str, cfg: dict
@@ -99,7 +114,7 @@ class ShopifyClient:
         return nodes
 
     def iter_all_products(
-        self, cfg: dict, query: Optional[str] = None, page_delay: float = 0.5
+        self, cfg: dict, query: Optional[str] = None
     ) -> Iterator[dict]:
         """Yield each product node with its complete variants list."""
         base: dict[str, str] = vars_from_cfg(cfg)
@@ -130,7 +145,6 @@ class ShopifyClient:
             if not info.get("hasNextPage"):
                 break
             cursor = info["endCursor"]
-            time.sleep(page_delay)
 
     # ── Locations ─────────────────────────────────────────────────────────────
 
