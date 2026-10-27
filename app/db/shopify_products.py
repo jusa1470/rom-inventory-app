@@ -152,21 +152,50 @@ def count_products() -> int:
     return get_conn().execute("SELECT COUNT(*) FROM shopify_products").fetchone()[0]
 
 
-def list_products(search: str = "", page: int = 1, per_page: int = 50) -> dict:
+def list_products(
+    search: str = "",
+    page: int = 1,
+    per_page: int = 50,
+    sort: str = "title",
+    direction: str = "asc",
+    filters: Optional[dict[str, list[str]]] = None,
+) -> dict:
     conn = get_conn()
-    where, params = "", []
+    filters = filters or {}
+    clauses: list[str] = []
+    params: list = []
+
     if search:
         like = f"%{search}%"
-        where = """WHERE title LIKE ? OR vendor LIKE ? OR product_id IN (
+        clauses.append("""(title LIKE ? OR vendor LIKE ? OR product_id IN (
             SELECT product_id FROM shopify_variants
-            WHERE upc LIKE ? OR barcode LIKE ? OR sku LIKE ?)"""
-        params = [like] * 5
+            WHERE upc LIKE ? OR barcode LIKE ? OR sku LIKE ?))""")
+        params += [like] * 5
+    for key, col in TEXT_FILTERS.items():
+        for term in filters.get(key, []):
+            clauses.append(f"{col} LIKE ?")
+            params.append(f"%{term}%")
+    for key, col in VALUE_FILTERS.items():
+        vals = filters.get(key)
+        if vals:
+            clauses.append(f"{col} IN ({','.join('?' * len(vals))})")
+            params += vals
+    for key, col in LIST_FILTERS.items():
+        vals = filters.get(key)
+        if vals:
+            clauses.append(
+                "(" + " OR ".join(f"instr(',' || {col} || ',', ?) > 0" for _ in vals) + ")")
+            params += [f",{v}," for v in vals]
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    order = SORT_COLUMNS.get(sort, SORT_COLUMNS["title"])
+    order_dir = "DESC" if direction == "desc" else "ASC"
 
     total = conn.execute(
         f"SELECT COUNT(*) FROM shopify_products {where}", params).fetchone()[0]
     items = rows(conn.execute(
         f"SELECT * FROM shopify_products {where} "
-        f"ORDER BY title COLLATE NOCASE, product_id LIMIT ? OFFSET ?",
+        f"ORDER BY {order} {order_dir}, product_id LIMIT ? OFFSET ?",
         [*params, per_page, (max(page, 1) - 1) * per_page]).fetchall())
 
     if items:
@@ -184,3 +213,28 @@ def list_products(search: str = "", page: int = 1, per_page: int = 50) -> dict:
             p["image_url"] = next(
                 (img["url"] for v in p["variants"] for img in v["images"]), None)
     return {"items": items, "total": total}
+
+
+def get_filter_options() -> dict[str, list[str]]:
+    conn = get_conn()
+
+    def distinct(col: str) -> list[str]:
+        return [r[0] for r in conn.execute(
+            f"SELECT DISTINCT {col} FROM shopify_products "
+            f"WHERE {col} IS NOT NULL AND {col} != '' ORDER BY {col} COLLATE NOCASE")]
+
+    def tokens(col: str) -> list[str]:
+        found: set[str] = set()
+        for (value,) in conn.execute(
+            f"SELECT DISTINCT {col} FROM shopify_products "
+            f"WHERE {col} IS NOT NULL AND {col} != ''"):
+            found.update(split_list(value))
+        return sorted(found, key=str.lower)
+
+    return {
+        "status": distinct("status"),
+        "category": distinct("category_name"),
+        "type": distinct("type"),
+        "genres": tokens("genres"),
+        "tags": tokens("tags"),
+    }

@@ -143,8 +143,8 @@ tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: var(--bg-raised); }
 .num { text-align: right; }
 .cell-truncate { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.variants-table { table-layout: auto; }
-.variants-table td { max-width: 220px; }
+.table-wrap > table.variants-table { table-layout: auto; width: max-content; min-width: 100%; }
+.variants-table td { max-width: 360px; }
 .product-thumb, .product-thumb-placeholder {
   width: 40px; height: 40px; border-radius: var(--radius-sm);
   border: 1px solid var(--border); background: var(--bg-raised);
@@ -208,7 +208,7 @@ tbody tr:hover { background: var(--bg-raised); }
 }
 .modal-box {
   background: var(--bg-card); border: 1px solid var(--border-light);
-  border-radius: var(--radius-lg); padding: 28px 32px; max-width: 95vw; max-height: 88vh;
+  border-radius: var(--radius-lg); padding: 28px 32px; max-width: 98vw; max-height: 92vh;
   overflow-y: auto; box-shadow: var(--shadow-lg);
   display: flex; flex-direction: column; gap: 20px;
 }
@@ -232,3 +232,30 @@ tbody tr:hover { background: var(--bg-raised); }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+
+/* ── Products: sort, filters, multi-select ──────────────────────── */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text-primary); }
+.sort-ind { margin-left: 4px; color: var(--blue); }
+.filter-row th { padding: 6px 14px 10px; background: var(--bg-surface); }
+.filter-input { height: 30px; font-size: 12px; }
+#pager-top .pager { padding: 0 0 12px; }
+
+.ms-btn {
+  width: 100%; height: 30px; padding: 0 10px; text-align: left; cursor: pointer;
+  background: var(--bg-base); color: var(--text-muted);
+  border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+  font: 12px 'DM Sans', sans-serif;
+}
+.ms-btn.active { color: var(--text-primary); border-color: var(--blue); }
+.ms-panel {
+  position: fixed; z-index: 500; width: 260px; max-height: 340px;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px;
+  background: var(--bg-card); border: 1px solid var(--border-light);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+}
+.ms-panel[hidden] { display: none; }
+.ms-list { overflow-y: auto; flex: 1; min-height: 60px; }
+.ms-item { display: flex; align-items: center; gap: 8px; padding: 5px 4px; font-size: 13px; cursor: pointer; border-radius: var(--radius-sm); }
+.ms-item:hover { background: var(--bg-raised); }
+.ms-empty { padding: 8px 4px; }

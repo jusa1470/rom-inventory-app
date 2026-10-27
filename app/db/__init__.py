@@ -1,6 +1,7 @@
 from app.db.connection import get_conn, transaction
 from app.db.shopify_products import (
     count_products,
+    get_filter_options,
     get_product_detail,
     list_products,
     save_product,
@@ -15,7 +16,7 @@ def init_db() -> None:
 
 
 __all__: list[str] = [
-    "count_products", "get_conn", "get_config", "get_product_detail",
+    "count_products", "get_conn", "get_config", "get_filter_options", "get_product_detail",
     "get_sync_log", "init_db", "is_dry_run", "list_products", "log_sync",
     "save_product", "transaction", "upsert_config",
 ]
