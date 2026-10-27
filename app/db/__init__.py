@@ -1,12 +1,12 @@
 from app.db.connection import get_conn, transaction
-from app.db.products import (
+from app.db.shopify_products import (
     count_products,
     get_product_detail,
     list_products,
     save_product,
 )
 from app.db.schema import init_db as _apply_schema
-from app.db.settings import get_config, is_dry_run, upsert_config
+from app.db.app_config import get_config, is_dry_run, upsert_config
 from app.db.sync_log import get_sync_log, log_sync
 
 
