@@ -75,10 +75,10 @@ query GetProducts($first: Int!, $after: String, $query: String, $variantFirst: I
 Q_MORE_VARIANTS: str = """
 query MoreVariants($id: ID!, $after: String, $variantFirst: Int!, __VARS__) {
 	product(id: $id) {
-    	variants(first: $variantFirst, after: $after) {
-      		pageInfo { hasNextPage endCursor }
-      		nodes { ...VariantFields }
-    	}
+		variants(first: $variantFirst, after: $after) {
+			pageInfo { hasNextPage endCursor }
+			nodes { ...VariantFields }
+		}
   	}
 }
 """.replace("__VARS__", var_defs(VARIANT_METAFIELDS)) + VARIANT_FIELDS

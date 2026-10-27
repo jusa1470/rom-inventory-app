@@ -1,6 +1,7 @@
 import logging
 import time
 from typing import Any, Iterator, Optional
+from xml.parsers.expat import errors
 
 import requests
 
@@ -23,10 +24,12 @@ class ShopifyClient:
         self.version: str = api_version
         self.url: str = f"https://{self.store}/admin/api/{self.version}/graphql.json"
         self._s = requests.Session()
-        self._s.headers.update({
-            "Content-Type": "application/json",
-            "X-Shopify-Access-Token": self.token,
-        })
+        self._s.headers.update(
+            {
+                "Content-Type": "application/json",
+                "X-Shopify-Access-Token": self.token,
+            }
+        )
 
     # ── Core GQL with rate-limit handling ─────────────────────────────────────
 
@@ -41,7 +44,9 @@ class ShopifyClient:
             # 429 - respect Retry-After header
             if resp.status_code == 429:
                 wait = float(resp.headers.get("Retry-After", 2))
-                logger.warning("Shopify 429 - sleeping %ss (attempt %d)", wait, attempt + 1)
+                logger.warning(
+                    "Shopify 429 - sleeping %ss (attempt %d)", wait, attempt + 1
+                )
                 time.sleep(wait)
                 continue
 
@@ -50,9 +55,7 @@ class ShopifyClient:
 
             # Throttle check - slow down when the cost bucket is nearly empty
             throttle = (
-                (body.get("extensions") or {})
-                .get("cost", {})
-                .get("throttleStatus", {})
+                (body.get("extensions") or {}).get("cost", {}).get("throttleStatus", {})
             )
             available = throttle.get("currentlyAvailable", 1000)
             restore = throttle.get("restoreRate", 50)
@@ -64,7 +67,9 @@ class ShopifyClient:
             errors = body.get("errors", [])
             if errors:
                 if any("throttled" in str(e).lower() for e in errors):
-                    logger.warning("Shopify throttled - sleeping 3s (attempt %d)", attempt + 1)
+                    logger.warning(
+                        "Shopify throttled - sleeping 3s (attempt %d)", attempt + 1
+                    )
                     time.sleep(3)
                     continue
                 raise RuntimeError(f"Shopify GQL error: {errors}")
@@ -73,7 +78,7 @@ class ShopifyClient:
 
         raise RuntimeError("Shopify API rate limit exceeded after retries")
 
-    # ── Products ──────────────────────────────────────────────────────────────
+        # ── Products ──────────────────────────────────────────────────────────────
 
     def _fetch_remaining_variants(
         self, product_id: str, after: str, cfg: dict
@@ -84,7 +89,9 @@ class ShopifyClient:
         nodes: list[dict] = []
         cursor: Optional[str] = after
         while cursor:
-            data = self.gql(Q_MORE_VARIANTS, {**variables, "id": product_id, "after": cursor})
+            data = self.gql(
+                Q_MORE_VARIANTS, {**variables, "id": product_id, "after": cursor}
+            )
             page = ((data.get("product") or {}).get("variants")) or {}
             nodes.extend(page.get("nodes", []))
             info = page.get("pageInfo") or {}
@@ -98,20 +105,25 @@ class ShopifyClient:
         base: dict[str, str] = vars_from_cfg(cfg)
         cursor: Optional[str] = None
         while True:
-            data = self.gql(Q_PRODUCTS, {
-                **base,
-                "first": config.SHOPIFY_PAGE_SIZE,
-                "variantFirst": config.SHOPIFY_VARIANT_PAGE_SIZE,
-                "after": cursor,
-                "query": query,
-            })
+            data = self.gql(
+                Q_PRODUCTS,
+                {
+                    **base,
+                    "first": config.SHOPIFY_PAGE_SIZE,
+                    "variantFirst": config.SHOPIFY_VARIANT_PAGE_SIZE,
+                    "after": cursor,
+                    "query": query,
+                },
+            )
             page = data.get("products") or {}
             for node in page.get("nodes", []):
                 variants = node.get("variants") or {}
                 info = variants.get("pageInfo") or {}
                 if info.get("hasNextPage"):
                     variants.setdefault("nodes", []).extend(
-                        self._fetch_remaining_variants(node["id"], info["endCursor"], cfg)
+                        self._fetch_remaining_variants(
+                            node["id"], info["endCursor"], cfg
+                        )
                     )
                 yield node
             info = page.get("pageInfo") or {}
