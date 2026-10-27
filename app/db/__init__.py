@@ -14,7 +14,7 @@ def init_db() -> None:
     _apply_schema(get_conn())
 
 
-__all__ = [
+__all__: list[str] = [
     "count_products", "get_conn", "get_config", "get_product_detail",
     "get_sync_log", "init_db", "is_dry_run", "list_products", "log_sync",
     "save_product", "transaction", "upsert_config",
