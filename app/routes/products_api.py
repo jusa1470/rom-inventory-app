@@ -1,4 +1,3 @@
-# Router: prefix="/api/products", with the same require_session dependency.
 from fastapi import APIRouter, Depends, HTTPException
 
 from app import db
@@ -10,7 +9,7 @@ router = APIRouter(
 )
 
 
-@router.get("/")
+@router.get("")
 def list_products(q: str | None = None, page: int = 1, per_page: int | None = None):
     if page < 1:
         page = 1
@@ -30,7 +29,7 @@ def list_products(q: str | None = None, page: int = 1, per_page: int | None = No
 
 
 @router.get("/{product_id}")
-def get_product_detail(product_id: int):
+def get_product_detail(product_id: str):
     product = db.get_product_detail(product_id)
     if not product:
         raise HTTPException(404, "Product not found")

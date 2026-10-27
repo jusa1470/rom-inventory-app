@@ -29,7 +29,7 @@ def get_creds() -> dict:
     return _creds
 
 
-@router.post("/api/login")
+@router.post("/login")
 def login(body: Login, response: Response):
     global _creds
     now = time.time()
@@ -47,7 +47,7 @@ def login(body: Login, response: Response):
     return {"ok": True}
 
 
-@router.post("/api/logout")
+@router.post("/logout")
 def logout(response: Response, rs_session: str | None = Cookie(default=None)):
     _sessions.discard(rs_session or "")
     if not _sessions:
@@ -57,6 +57,6 @@ def logout(response: Response, rs_session: str | None = Cookie(default=None)):
     return {"ok": True}
 
 
-@router.get("/api/me", dependencies=[Depends(require_session)])
+@router.get("/me", dependencies=[Depends(require_session)])
 def me():
     return {"ok": True}

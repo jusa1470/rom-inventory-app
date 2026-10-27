@@ -7,5 +7,5 @@ credentials.json
 .secret_key
 .sessions/
 .vscode/
-
+vault.enc
 shopify_token.py

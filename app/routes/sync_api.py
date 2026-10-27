@@ -1,10 +1,9 @@
 
 
-from fastapi import APIRouter, Depends
-from flask import jsonify
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app import db, db, jobs
-from app.auth import require_session
+from app import db, jobs
+from app.auth import get_creds, require_session
 
 
 router = APIRouter(
@@ -13,39 +12,35 @@ router = APIRouter(
 
 
 @router.post("/shopify")
-def start_shopify_sync(full: bool = False):
-    cfg = jobs.get_config()
-    creds = jobs.get_creds()
-    store = cfg.get("shopify_store")
-    token = creds.get("shopify_token_enc")
+def start_shopify_sync(full: bool = False, creds: dict = Depends(get_creds)):
+    store = creds.get("shopify_store")
+    token = creds.get("shopify_token")
     if not store or not token:
-        return jsonify({"error": "Shopify credentials not configured"}), 400
+        raise HTTPException(400, "Shopify credentials not configured")
     if any(job["name"] == "Shopify Sync" for job in jobs.get_running()):
-        return jsonify({"error": "Shopify Sync job already running"}), 409
+        raise HTTPException(409, "Shopify Sync job already running")
     job_id = jobs.start("Shopify Sync", jobs.run_shopify_sync, store, token, full)
-    return jsonify({"job_id": job_id})
+    return {"job_id": job_id}
 
 
 @router.get("/status/{job_id}")
 def sync_status(job_id: str):
     job = jobs.get(job_id)
-    if not job:
-        return jsonify({"error": "Job not found"}), 404
-    return jsonify(job)
+    if not job or job["status"] == "not_found":
+       raise HTTPException(404, "Job not found")
+    return job
 
 
 @router.post("/cancel/{job_id}")
 def cancel_job(job_id: str):
-    return jsonify({"ok": jobs.cancel(job_id)})
+    return {"ok": jobs.cancel(job_id)}
 
 
 @router.get("/running")
 def running_jobs():
-    return jsonify({"jobs": jobs.get_running()})
+    return {"jobs": jobs.get_running()}
 
 
 @router.get("/log")
-def get_sync_log(limit: int = 15):
-    if limit < 1 or limit > 200:
-        return jsonify({"error": "Limit must be between 1 and 200"}), 400
-    return jsonify({"items": db.get_sync_log(limit)})
+def get_sync_log(limit: int = Query(15, ge=1, le=200)):
+    return {"items": db.get_sync_log(limit)}
