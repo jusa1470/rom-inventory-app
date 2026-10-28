@@ -126,8 +126,21 @@ h1, h2 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.04em; line-hei
 
 /* ── Tables ─────────────────────────────────────────────────────── */
 .table-wrap { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-x: auto; }
+
 table { width: 100%; border-collapse: collapse; }
 .table-wrap > table { table-layout: fixed; }
+
+.page:has(#products-head) {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.table-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
 thead tr { background: var(--bg-raised); border-bottom: 1px solid var(--border-light); }
 th {
   padding: 10px 14px; text-align: left; white-space: nowrap;
