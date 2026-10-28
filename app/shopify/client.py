@@ -1,10 +1,15 @@
+import json
 import logging
 import requests
 import time
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from app import config
 from app.shopify.queries import (
+    M_BULK_CANCEL,
+    M_BULK_RUN,
+    Q_BULK_STATUS,
+    bulk_products_query,
     Q_LOCATIONS,
     Q_MORE_VARIANTS,
     Q_PRODUCTS,
@@ -143,6 +148,88 @@ class ShopifyClient:
             if not info.get("hasNextPage"):
                 break
             cursor = info["endCursor"]
+
+    # ── Bulk export ───────────────────────────────────────────────────────────
+
+    def _run_bulk_query(
+        self,
+        inner: str,
+        on_status: Optional[Callable[[str], None]] = None,
+        cancelled: Optional[Callable[[], bool]] = None,
+    ) -> Optional[str]:
+        """Start a bulk query, wait for it, return the result file URL (None if empty/cancelled)."""
+        data = self.gql(M_BULK_RUN, {"query": inner})
+        result = data.get("bulkOperationRunQuery") or {}
+        if result.get("userErrors"):
+            raise RuntimeError(f"Shopify bulk query: {result['userErrors']}")
+        op_id = result["bulkOperation"]["id"]
+
+        while True:
+            if cancelled and cancelled():
+                self.gql(M_BULK_CANCEL, {"id": op_id})
+                return None
+            op = self.gql(Q_BULK_STATUS, {"id": op_id}).get("node") or {}
+            status = op.get("status")
+            if status == "COMPLETED":
+                return op.get("url")
+            if status in ("FAILED", "CANCELED", "EXPIRED"):
+                raise RuntimeError(
+                    f"Shopify bulk operation {status}: {op.get('errorCode')}"
+                )
+            if on_status:
+                on_status(
+                    f"Shopify is preparing the export… {op.get('objectCount') or 0} records"
+                )
+            time.sleep(config.SHOPIFY_BULK_POLL_SECONDS)
+
+    @staticmethod
+    def _bulk_lines(url: str) -> Iterator[dict]:
+        # Plain request on purpose: the result file is on Google storage, so the
+        # Shopify token header must not be sent.
+        with requests.get(url, stream=True, timeout=60) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if line:
+                    yield json.loads(line)
+
+    def iter_bulk_products(
+        self,
+        cfg: dict,
+        query: Optional[str] = None,
+        on_status: Optional[Callable[[str], None]] = None,
+        cancelled: Optional[Callable[[], bool]] = None,
+    ) -> Iterator[dict]:
+        """Yield product nodes in the same shape as iter_all_products, via a bulk export.
+
+        The JSONL has one record per line; child records carry __parentId and follow
+        their parent: product, its media/variants, each variant's media.
+        """
+        url = self._run_bulk_query(bulk_products_query(cfg, query), on_status, cancelled)
+        if not url:
+            return
+        product: Optional[dict] = None
+        variants: dict[str, dict] = {}
+        for obj in self._bulk_lines(url):
+            parent = obj.get("__parentId")
+            if parent is None:
+                if product:
+                    yield product
+                product = {**obj, "media": {"nodes": []}, "variants": {"nodes": []}}
+                variants = {}
+            elif "/ProductVariant/" in parent:
+                nodes = variants[parent]["media"]["nodes"]
+                if len(nodes) < 1:  # a variant has at most 1 image
+                    nodes.append(obj)
+            elif "/ProductVariant/" in obj["id"]:
+                variant = {**obj, "media": {"nodes": []}}
+                variants[obj["id"]] = variant
+                product["variants"]["nodes"].append(variant)
+            else:
+                nodes = product["media"]["nodes"]
+                if len(nodes) < 3:  # a product has at most 3 images
+                    nodes.append(obj)
+        if product:
+            yield product
 
     # ── Locations ─────────────────────────────────────────────────────────────
 

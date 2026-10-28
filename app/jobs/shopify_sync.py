@@ -48,7 +48,12 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
     update(job_id, total=total, message="Syncing products…")
     t0: float = time.monotonic()
 
-    for node in client.iter_all_products(cfg, query):
+    for node in client.iter_bulk_products(
+        cfg,
+        query,
+        on_status=lambda msg: update(job_id, message=msg),
+        cancelled=lambda: is_cancelled(job_id),
+    ):
         if is_cancelled(job_id):
             break
         try:
