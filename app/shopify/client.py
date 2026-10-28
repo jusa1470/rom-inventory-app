@@ -1,9 +1,7 @@
 import logging
+import requests
 import time
 from typing import Any, Iterator, Optional
-from xml.parsers.expat import errors
-
-import requests
 
 from app import config
 from app.shopify.queries import (
@@ -70,7 +68,7 @@ class ShopifyClient:
             # The next request is rejected unless the bucket holds its requested cost.
             if available < requested:
                 wait = (requested - available) / max(restore, 1)
-                logger.info(
+                logger.debug(
                     "Shopify bucket low (%s < %s) - sleeping %.1fs", available, requested, wait
                 )
                 time.sleep(wait)

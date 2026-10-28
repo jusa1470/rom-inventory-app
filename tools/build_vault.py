@@ -3,7 +3,8 @@
 credentials.json:
 {
     "shopify_store": "...", "shopify_token": "...",
-    "test_shopify_store": "...", "test_shopify_token": "..."
+    "test_shopify_store": "...", "test_shopify_token": "...",
+    "shopify_client_id": "...", "shopify_client_secret": "..."
 }
 
 Usage: python tools/build_vault.py

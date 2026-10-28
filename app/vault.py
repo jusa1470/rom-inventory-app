@@ -46,3 +46,17 @@ def open_vault(password: str) -> dict:
     if not VAULT_PATH.exists():
         raise VaultError("vault.enc not found")
     return unseal(password, VAULT_PATH.read_bytes())
+
+
+def save_vault(password: str, data: dict) -> None:
+    """Seal data and replace vault.enc atomically."""
+    tmp = VAULT_PATH.with_name(VAULT_PATH.name + ".tmp")
+    tmp.write_bytes(seal(password, data))
+    os.replace(tmp, VAULT_PATH)
+
+
+def update_vault(password: str, updates: dict) -> dict:
+    """Merge updates into the vault contents, save, and return the merged dict."""
+    data = {**open_vault(password), **updates}
+    save_vault(password, data)
+    return data

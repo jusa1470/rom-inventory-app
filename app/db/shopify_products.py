@@ -57,8 +57,21 @@ def _upsert(conn, table: str, pk: str, data: dict) -> None:
     )
 
 
+def _save_images(conn, product_id: str, p: dict) -> None:
+    conn.execute("DELETE FROM shopify_images WHERE product_id=?", (product_id,))
+    for pos, m in enumerate((p.get("media") or {}).get("nodes", [])):
+        url = ((m.get("preview") or {}).get("image") or {}).get("url")
+        if url:
+            conn.execute(
+                "INSERT INTO shopify_images (product_id, media_id, url, position) "
+                "VALUES (?, ?, ?, ?)",
+                (product_id, strip_gid(m["id"]), url, pos),
+            )
+
+
 def _save_variant(conn, product_id: str, v: dict) -> str:
     inv = v.get("inventoryItem") or {}
+    media = (v.get("media") or {}).get("nodes") or []
     weight = (inv.get("measurement") or {}).get("weight") or {}
     variant_id = strip_gid(v["id"])
     _upsert(conn, "shopify_variants", "variant_id", {
@@ -78,16 +91,8 @@ def _save_variant(conn, product_id: str, v: dict) -> str:
         "inventory_quantity": v.get("inventoryQuantity") or 0,
         "weight": weight.get("value"),
         "weight_unit": weight.get("unit"),
+        "media_id": strip_gid(media[0]["id"]) if media else None,
     })
-    conn.execute("DELETE FROM shopify_images WHERE variant_id=?", (variant_id,))
-    for pos, m in enumerate((v.get("media") or {}).get("nodes", [])):
-        url = ((m.get("preview") or {}).get("image") or {}).get("url")
-        if url:
-            conn.execute(
-                "INSERT INTO shopify_images (variant_id, media_id, url, position) "
-                "VALUES (?, ?, ?, ?)",
-                (variant_id, strip_gid(m.get("id")), url, 0),
-            )
     return variant_id
 
 
@@ -112,6 +117,7 @@ def save_product(p: dict) -> None:
         conn.execute(
             "UPDATE shopify_products SET last_synced=datetime('now') WHERE product_id=?",
             (product_id,))
+        _save_images(conn, product_id, p)
         keep = [_save_variant(conn, product_id, v)
                 for v in (p.get("variants") or {}).get("nodes", [])]
         marks = ",".join("?" * len(keep))
@@ -122,17 +128,27 @@ def save_product(p: dict) -> None:
         )
 
 
-def _attach_images(conn, variants: list[dict]) -> None:
-    if not variants:
+def _attach_images(conn, products: list[dict]) -> None:
+    """Give each product its `images`; give each variant an `image_url` (via its
+    media_id) and each product an `image_url` thumbnail. Call after `variants` is set."""
+    if not products:
         return
-    ids = [v["variant_id"] for v in variants]
-    by_variant = {i: [] for i in ids}
+    ids = [p["product_id"] for p in products]
     marks = ",".join("?" * len(ids))
+    by_product = {i: [] for i in ids}
     for r in conn.execute(
-        f"SELECT * FROM shopify_images WHERE variant_id IN ({marks}) ORDER BY position", ids):
-        by_variant[r["variant_id"]].append(dict(r))
-    for v in variants:
-        v["images"] = by_variant[v["variant_id"]]
+        f"SELECT * FROM shopify_images WHERE product_id IN ({marks}) ORDER BY position", ids):
+        by_product[r["product_id"]].append(dict(r))
+    for p in products:
+        images = by_product[p["product_id"]]
+        urls = {img["media_id"]: img["url"] for img in images}
+        for v in p["variants"]:
+            v["image_url"] = urls.get(v.get("media_id"))
+        p["images"] = images
+        p["image_url"] = (
+            next((v["image_url"] for v in p["variants"] if v["image_url"]), None)
+            or (images[0]["url"] if images else None)
+        )
 
 
 def get_product_detail(product_id: str) -> Optional[dict]:
@@ -144,7 +160,7 @@ def get_product_detail(product_id: str) -> Optional[dict]:
     product["variants"] = rows(conn.execute(
         "SELECT * FROM shopify_variants WHERE product_id=? ORDER BY rowid",
         (product_id,)).fetchall())
-    _attach_images(conn, product["variants"])
+    _attach_images(conn, [product])
     return product
 
 
@@ -204,14 +220,12 @@ def list_products(
         variants = rows(conn.execute(
             f"SELECT * FROM shopify_variants WHERE product_id IN ({marks}) ORDER BY rowid",
             ids).fetchall())
-        _attach_images(conn, variants)
         by_product = {i: [] for i in ids}
         for v in variants:
             by_product[v["product_id"]].append(v)
         for p in items:
             p["variants"] = by_product[p["product_id"]]
-            p["image_url"] = next(
-                (img["url"] for v in p["variants"] for img in v["images"]), None)
+        _attach_images(conn, items)
     return {"items": items, "total": total}
 
 

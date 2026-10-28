@@ -259,3 +259,11 @@ th.sortable:hover { color: var(--text-primary); }
 .ms-item { display: flex; align-items: center; gap: 8px; padding: 5px 4px; font-size: 13px; cursor: pointer; border-radius: var(--radius-sm); }
 .ms-item:hover { background: var(--bg-raised); }
 .ms-empty { padding: 8px 4px; }
+
+.image-strip { display: flex; gap: 8px; flex-wrap: wrap; }
+.image-strip img { height: 140px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+
+textarea.scope-box { height: 96px; padding: 8px 12px; resize: vertical; font-family: 'DM Mono', monospace; font-size: 12px; line-height: 1.5; }
+.scope-add { display: flex; gap: 8px; margin-top: 8px; }
+.scope-add .input { max-width: 340px; }
+select.input { cursor: pointer; }

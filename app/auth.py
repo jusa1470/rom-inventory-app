@@ -29,18 +29,34 @@ def get_creds() -> dict:
     return _creds
 
 
-@router.post("/login")
-def login(body: Login, response: Response):
-    global _creds
+def check_password(password: str, wrong_status: int = 401) -> dict:
+    """Open the vault with the app password (rate limited); return its contents.
+
+    wrong_status: HTTP status for a wrong password. Callers that are already signed in
+    pass 403 so the frontend doesn't treat it as an expired session.
+    """
     now = time.time()
     _fails[:] = [t for t in _fails if now - t < 60]
     if len(_fails) >= 5:
         raise HTTPException(429, "Too many attempts, wait a minute")
     try:
-        _creds = vault.open_vault(body.password)
+        return vault.open_vault(password)
     except vault.VaultError as e:
         _fails.append(now)
-        raise HTTPException(401, str(e))
+        raise HTTPException(wrong_status, str(e))
+
+
+def set_creds(creds: dict) -> None:
+    """Replace the in-memory credentials (no-op if the app has been locked)."""
+    global _creds
+    if _creds is not None:
+        _creds = creds
+
+
+@router.post("/login")
+def login(body: Login, response: Response):
+    global _creds
+    _creds = check_password(body.password)
     token = secrets.token_urlsafe(32)
     _sessions.add(token)
     response.set_cookie("rs_session", token, httponly=True, samesite="strict")

@@ -7,7 +7,7 @@ import { Fmt, buildPager, debounce, esc, statusBadge, thumb, truncCell } from '.
 // key = filter name (and filter-options key); sort = backend sort key
 const COLUMNS = [
   { label: '', width: 58 },
-  { label: 'Title', key: 'title', sort: 'title', filter: 'text' },
+  { label: 'Title', width: 320, key: 'title', sort: 'title', filter: 'text' },
   { label: 'Vendor', width: 160, key: 'vendor', sort: 'vendor', filter: 'text' },
   { label: 'Status', width: 120, key: 'status', sort: 'status', filter: 'select' },
   { label: 'Category', width: 200, key: 'category', sort: 'category', filter: 'select' },
@@ -19,6 +19,8 @@ const COLUMNS = [
   { label: 'Qty', width: 80, sort: 'qty', num: true },
   { label: '', width: 100, clear: true },
 ];
+
+const TABLE_MIN_WIDTH = COLUMNS.reduce((n, c) => n + (c.width || 0), 0);
 
 const listText = v => (v ? String(v).split(',').join(', ') : '');
 
@@ -59,7 +61,7 @@ export class ProductsPage {
         </div>
         <div id="pager-top"></div>
         <div class="table-wrap">
-          <table>
+          <table style="min-width:${TABLE_MIN_WIDTH}px">
             <colgroup>${COLUMNS.map(c => `<col${c.width ? ` style="width:${c.width}px"` : ''}>`).join('')}</colgroup>
             <thead id="products-head"></thead>
             <tbody id="products-body"></tbody>
@@ -246,6 +248,11 @@ export class ProductsPage {
         ${item('Tags', listText(p.tags))}
         ${item('Last synced', Fmt.datetime(p.last_synced))}
       </div>
+      ${p.images.length ? `
+        <div class="section-label">Product images (${p.images.length})</div>
+        <div class="image-strip">
+          ${p.images.map(img => `<img src="${esc(img.url)}" alt="${esc(p.title)}">`).join('')}
+        </div>` : ''}
       <div class="section-label">Variants (${p.variants.length})</div>
       <div class="table-wrap">
         <table class="variants-table">
@@ -257,7 +264,7 @@ export class ProductsPage {
           <tbody>
             ${p.variants.map(v => `
               <tr>
-                <td>${thumb(v.images && v.images[0] && v.images[0].url, v.title)}</td>
+                <td>${thumb(v.image_url, v.title)}</td>
                 <td>${truncCell(v.title)}</td>
                 <td class="mono">${esc(v.sku || '—')}</td>
                 <td class="mono">${esc(v.barcode || '—')}</td>

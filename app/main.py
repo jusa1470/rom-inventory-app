@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 
 from app import auth, db
-from app.routes import products_api, settings_api, sync_api
+from app.routes import products_api, settings_api, shopify_oauth_api, sync_api
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +24,8 @@ app.include_router(auth.router)
 app.include_router(settings_api.router)
 app.include_router(sync_api.router)
 app.include_router(products_api.router)
+app.include_router(shopify_oauth_api.router)
+app.include_router(shopify_oauth_api.callback_router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

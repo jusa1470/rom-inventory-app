@@ -3,6 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import db
 from app.auth import get_creds, require_session
+from app.shopify.oauth import DEFAULT_SCOPES, STORES
 
 router = APIRouter(
     prefix="/api/settings", tags=["settings"], dependencies=[Depends(require_session)]
@@ -37,8 +38,16 @@ def _settings_response(cfg: dict, creds: dict) -> dict:
         "shopify_location_id": cfg.get("shopify_location_id") or "",
         "last_shopify_sync": cfg.get("last_shopify_sync") or "",
         # Credentials come from the vault; the token itself is never returned
-        "shopify_store": creds.get("shopify_store") or "",
-        "shopify_token_set": bool(creds.get("shopify_token")),
+        "stores": {
+            name: {
+                "store": creds.get(keys["store"]) or "",
+                "token_set": bool(creds.get(keys["token"])),
+                "scope": creds.get(keys["scope"]) or "",
+            }
+            for name, keys in STORES.items()
+        },
+        "oauth_ready": bool(creds.get("shopify_client_id") and creds.get("shopify_client_secret")),
+        "default_scopes": ",".join(DEFAULT_SCOPES),
     }
 
 

@@ -83,6 +83,20 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_variants_sku      ON shopify_variants(sku);
     CREATE INDEX IF NOT EXISTS idx_images_variant    ON shopify_images(variant_id);
     """,
+    # 2: images belong to the product; each variant points at one of them (media_id)
+    """
+    DROP TABLE IF EXISTS shopify_images;
+    CREATE TABLE shopify_images (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id  TEXT NOT NULL REFERENCES shopify_products(product_id) ON DELETE CASCADE,
+        media_id    TEXT NOT NULL,
+        url         TEXT,
+        position    INTEGER DEFAULT 0,
+        UNIQUE(product_id, media_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_images_product ON shopify_images(product_id);
+    ALTER TABLE shopify_variants ADD COLUMN media_id TEXT;
+    """,
 ]
 
 

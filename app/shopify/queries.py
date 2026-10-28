@@ -45,7 +45,7 @@ fragment VariantFields on ProductVariant {
   	description: metafield(namespace: $descriptionNamespace, key: $descriptionKey) { value }
   	release_date: metafield(namespace: $releaseDateNamespace, key: $releaseDateKey) { value }
   	variant_tags: metafield(namespace: $variantTagsNamespace, key: $variantTagsKey) { value }
-  	media(first: 1) { nodes { id preview { image { url } } } }
+  	media(first: 1) { nodes { id } }
   	inventoryItem {
 		id
 		unitCost { amount }
@@ -63,6 +63,7 @@ query GetProducts($first: Int!, $after: String, $query: String, $variantFirst: I
 			category { id name }
 			genres: metafield(namespace: $genresNamespace, key: $genresKey) { value }
 			type: metafield(namespace: $typeNamespace, key: $typeKey) { value }
+			media(first: 3) { nodes { id preview { image { url } } } }
 			variants(first: $variantFirst) {
 				pageInfo { hasNextPage endCursor }
 				nodes { ...VariantFields }
