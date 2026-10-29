@@ -45,8 +45,6 @@ MIGRATIONS: list[str] = [
         variant_id          TEXT PRIMARY KEY,
         product_id          TEXT NOT NULL REFERENCES shopify_products(product_id) ON DELETE CASCADE,
         title               TEXT,
-        barcode             TEXT,
-        sku                 TEXT,
         upc                 TEXT,
         description         TEXT,
         release_date        TEXT,
@@ -82,8 +80,6 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_products_upc      ON shopify_products(upc);
     CREATE INDEX IF NOT EXISTS idx_variants_product  ON shopify_variants(product_id);
     CREATE INDEX IF NOT EXISTS idx_variants_upc      ON shopify_variants(upc);
-    CREATE INDEX IF NOT EXISTS idx_variants_barcode  ON shopify_variants(barcode);
-    CREATE INDEX IF NOT EXISTS idx_variants_sku      ON shopify_variants(sku);
     CREATE INDEX IF NOT EXISTS idx_images_product    ON shopify_images(product_id);
     """,
 ]

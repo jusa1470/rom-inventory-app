@@ -57,7 +57,7 @@ export class ProductsPage {
       <div class="page">
         <div class="page-title">Products</div>
         <div class="search-row">
-          <input class="input" id="p-search" placeholder="Search all columns — title, vendor, UPC, SKU, barcode…">
+          <input class="input" id="p-search" placeholder="Search all columns — title, vendor, UPC…">
         </div>
         <div id="pager-top"></div>
         <div class="table-wrap">
@@ -258,7 +258,7 @@ export class ProductsPage {
       <div class="table-wrap">
         <table class="variants-table">
           <thead><tr>
-            <th></th><th>Title</th><th>SKU</th><th>Barcode</th><th>UPC</th>
+            <th></th><th>Title</th><th>UPC</th>
             <th class="num">Price</th><th class="num">Cost</th><th class="num">Qty</th>
             <th>Weight</th><th>Release date</th><th>Variant tags</th><th>Description</th>
           </tr></thead>
@@ -267,8 +267,6 @@ export class ProductsPage {
               <tr>
                 <td>${thumb(v.image_url, v.title)}</td>
                 <td>${truncCell(v.title)}</td>
-                <td class="mono">${esc(v.sku || '—')}</td>
-                <td class="mono">${esc(v.barcode || '—')}</td>
                 <td class="mono">${esc(Fmt.upc(v.upc))}</td>
                 <td class="num">${Fmt.price(v.price)}</td>
                 <td class="num">${Fmt.price(v.cost)}</td>
@@ -286,7 +284,102 @@ export class ProductsPage {
       title: p.title,
       body,
       width: '96vw',
-      buttons: [{ label: 'Close', onClick: Modal.close }],
+      buttons: [
+        { label: 'Edit', cls: 'btn-primary', onClick: () => this._openEdit(p) },
+        { label: 'Close', onClick: Modal.close },
+      ],
+    });
+  }
+
+  _openEdit(p) {
+    const LB = { POUNDS: 1, OUNCES: 1 / 16, KILOGRAMS: 2.20462, GRAMS: 1 / 453.592 };
+    const lbs = v => (v.weight == null ? '' : +(v.weight * (LB[v.weight_unit] ?? 1)).toFixed(4));
+    const inp = (name, label, val) => {
+      const s = String(val ?? '');
+      return `
+        <div class="input-group">
+          <label class="input-label">${label}</label>
+          <input class="input" name="${name}" value="${esc(s)}" data-orig="${esc(s.trim())}">
+        </div>`;
+    };
+    const PF = [
+      ['title', 'Title', p.title], ['vendor', 'Vendor', p.vendor],
+      ['product_type', 'Product type', p.product_type], ['handle', 'Handle', p.handle],
+      ['category', 'Category (name)', p.category_name], ['type', 'Type', p.type],
+      ['upc', 'UPC', p.upc], ['genres', 'Genres (comma separated)', listText(p.genres)],
+      ['tags', 'Tags (comma separated)', listText(p.tags)],
+    ];
+    const VF = v => [
+      ['title', 'Title', v.title], ['upc', 'UPC', v.upc],
+      ['description', 'Description', v.description],
+      ['release_date', 'Release date', v.release_date],
+      ['variant_tags', 'Variant tags', v.variant_tags], ['price', 'Price', v.price],
+      ['cost', 'Cost', v.cost], ['inventory_quantity', 'Qty', v.inventory_quantity],
+      ['weight', 'Weight (lbs)', lbs(v)],
+    ];
+
+    const body = document.createElement('div');
+    body.innerHTML = `
+      <div class="form-grid" id="edit-product">
+        ${PF.map(f => inp(...f)).join('')}
+        <div class="input-group">
+          <label class="input-label">Status</label>
+          <select class="input" name="status" data-orig="${esc(p.status)}">
+            ${['ACTIVE', 'DRAFT', 'ARCHIVED'].map(s =>
+              `<option ${s === p.status ? 'selected' : ''}>${s}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="section-label">Variants</div>
+      ${p.variants.map(v => `
+        <div class="form-grid" data-vid="${esc(v.variant_id)}" data-iid="${esc(v.inventory_item_id)}"
+             style="margin-bottom:16px">
+          ${VF(v).map(f => inp(...f)).join('')}
+        </div>`).join('')}`;
+
+    const changed = root => {
+      const out = {};
+      root.querySelectorAll('[name]').forEach(i => {
+        const val = i.value.trim();
+        if (val !== i.dataset.orig) out[i.name] = val;
+      });
+      return out;
+    };
+
+    const save = async () => {
+      const product = changed(body.querySelector('#edit-product'));
+      ['tags', 'genres'].forEach(k => {
+        if (k in product) product[k] = product[k].split(',').map(s => s.trim()).filter(Boolean);
+      });
+      const variants = [...body.querySelectorAll('[data-vid]')].map(r => {
+        const f = changed(r);
+        if (!Object.keys(f).length) return null;
+        if ('inventory_quantity' in f) {
+          f.inventory_quantity = parseInt(f.inventory_quantity, 10);
+          f.inventory_item_id = r.dataset.iid;
+        }
+        if ('weight' in f) f.weight = parseFloat(f.weight);
+        return { id: r.dataset.vid, ...f };
+      }).filter(Boolean);
+      if (!Object.keys(product).length && !variants.length) return Modal.close();
+      try {
+        const res = await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
+        Modal.close();
+        res.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('Saved to Shopify');
+        this._load();
+      } catch (e) {
+        Toast.error(e.message);
+      }
+    };
+
+    Modal.open({
+      title: `Edit: ${p.title}`,
+      body,
+      width: '96vw',
+      buttons: [
+        { label: 'Save', cls: 'btn-primary', onClick: save },
+        { label: 'Cancel', onClick: Modal.close },
+      ],
     });
   }
 }

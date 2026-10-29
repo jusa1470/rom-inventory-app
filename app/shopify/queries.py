@@ -43,7 +43,7 @@ def vars_from_cfg(
 
 VARIANT_FIELDS: str = """
 fragment VariantFields on ProductVariant {
-  	id title barcode sku price taxable inventoryQuantity
+  	id title price taxable inventoryQuantity
   	upc: metafield(namespace: $upcNamespace, key: $upcKey) { value }
   	description: metafield(namespace: $descriptionNamespace, key: $descriptionKey) { value }
   	release_date: metafield(namespace: $releaseDateNamespace, key: $releaseDateKey) { value }
@@ -155,7 +155,7 @@ def bulk_products_query(cfg: dict, search: str | None = None) -> str:
       {product_mf}
       media {{ edges {{ node {{ id preview {{ image {{ url }} }} }} }} }}
       variants {{ edges {{ node {{
-        id title barcode sku price taxable inventoryQuantity
+        id title price taxable inventoryQuantity
         {variant_mf}
         media {{ edges {{ node {{ id }} }} }}
         inventoryItem {{
@@ -167,3 +167,36 @@ def bulk_products_query(cfg: dict, search: str | None = None) -> str:
     }} }}
   }}
 }}"""
+
+
+M_PRODUCT_UPDATE: str = """
+mutation ProductUpdate($product: ProductUpdateInput!) {
+  productUpdate(product: $product) {
+    product { id }
+    userErrors { field message }
+  }
+}
+"""
+
+M_VARIANTS_UPDATE: str = """
+mutation VariantsUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+  productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+    productVariants { id }
+    userErrors { field message }
+  }
+}
+"""
+
+M_INVENTORY_SET: str = """
+mutation SetQty($input: InventorySetQuantitiesInput!) {
+  inventorySetQuantities(input: $input) { userErrors { field message } }
+}
+"""
+
+Q_TAXONOMY: str = """
+query($search: String!) {
+  taxonomy { categories(first: 25, search: $search) { nodes { id name fullName } } }
+}
+"""
+
+Q_PRODUCT_OPTIONS: str = "query($id: ID!) { product(id: $id) { options { name } } }"

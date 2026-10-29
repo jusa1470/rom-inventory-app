@@ -6,9 +6,16 @@ from typing import Any, Callable, Iterator, Optional
 
 from app import config
 from app.shopify.queries import (
+    BULK_PRODUCT_MF,
+    BULK_VARIANT_MF,
     M_BULK_CANCEL,
     M_BULK_RUN,
+    M_INVENTORY_SET,
+    M_PRODUCT_UPDATE,
+    M_VARIANTS_UPDATE,
     Q_BULK_STATUS,
+    Q_PRODUCT_OPTIONS,
+    Q_TAXONOMY,
     bulk_products_query,
     Q_LOCATIONS,
     Q_MORE_VARIANTS,
@@ -19,6 +26,17 @@ from app.shopify.queries import (
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _mfs(f: dict, entries: list, cfg: dict) -> list[dict]:
+    out = []
+    for alias, ns_col, key_col in entries:
+        if alias in f:
+            val = f[alias]
+            if isinstance(val, list):
+                val = json.dumps(val)
+            out.append({"namespace": cfg[ns_col], "key": cfg[key_col], "value": str(val)})
+    return out
 
 
 class ShopifyClient:
@@ -230,6 +248,90 @@ class ShopifyClient:
                     nodes.append(obj)
         if product:
             yield product
+    
+    def find_category(self, name: str) -> dict:
+        data = self.gql(Q_TAXONOMY, {"search": name})
+        nodes = ((data.get("taxonomy") or {}).get("categories") or {}).get("nodes", [])
+        hits = [n for n in nodes
+                if name.strip().lower() in (n["name"].lower(), n["fullName"].lower())]
+        if len(hits) != 1:
+            raise RuntimeError(
+                f"Category '{name}': {'not found' if not hits else 'ambiguous, use full name'}")
+        return hits[0]
+
+    def update_product(self, product_id: str, f: dict, cfg: dict) -> None:
+        inp: dict[str, Any] = {"id": f"gid://shopify/Product/{product_id}"}
+        for local, api in (("title", "title"), ("vendor", "vendor"), ("status", "status"),
+                           ("product_type", "productType"), ("tags", "tags"),
+                           ("handle", "handle")):
+            if local in f:
+                inp[api] = f[local]
+        if "category_id" in f:
+            inp["category"] = f"gid://shopify/TaxonomyCategory/{f['category_id']}"
+        mfs = _mfs(f, BULK_PRODUCT_MF, cfg)
+        if mfs:
+            inp["metafields"] = mfs
+        data = self.gql(M_PRODUCT_UPDATE, {"product": inp})
+        errs = (data.get("productUpdate") or {}).get("userErrors")
+        if errs:
+            raise RuntimeError(f"productUpdate: {errs}")
+
+    def _option_names(self, product_id: str) -> list[str]:
+        data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
+        return [o["name"] for o in (data.get("product") or {}).get("options", [])]
+
+    def update_variants(self, product_id: str, variants: list[dict], cfg: dict) -> None:
+        options: Optional[list[str]] = None
+        bulk: list[dict] = []
+        for f in variants:
+            v: dict[str, Any] = {"id": f"gid://shopify/ProductVariant/{f['id']}"}
+            if "price" in f:
+                v["price"] = f["price"]
+            inv: dict[str, Any] = {}
+            if "cost" in f:
+                inv["cost"] = f["cost"]
+            if "weight" in f:
+                inv["measurement"] = {"weight": {"value": f["weight"], "unit": "POUNDS"}}
+            if inv:
+                v["inventoryItem"] = inv
+            if "title" in f:
+                options = options or self._option_names(product_id)
+                parts = [s.strip() for s in f["title"].split(" / ")]
+                if len(parts) != len(options):
+                    raise RuntimeError(f"Variant title needs {len(options)} part(s) separated by ' / '")
+                v["optionValues"] = [{"optionName": o, "name": n} for o, n in zip(options, parts)]
+            mfs = _mfs(f, BULK_VARIANT_MF, cfg)
+            if mfs:
+                v["metafields"] = mfs
+            if len(v) > 1:
+                bulk.append(v)
+        if bulk:
+            data = self.gql(
+                M_VARIANTS_UPDATE,
+                {"productId": f"gid://shopify/Product/{product_id}", "variants": bulk},
+            )
+            errs = (data.get("productVariantsBulkUpdate") or {}).get("userErrors")
+            if errs:
+                raise RuntimeError(f"variantsUpdate: {errs}")
+
+        qty = [
+            {
+                "inventoryItemId": f"gid://shopify/InventoryItem/{f['inventory_item_id']}",
+                "locationId": cfg["shopify_location_id"],
+                "quantity": f["inventory_quantity"],
+            }
+            for f in variants if "inventory_quantity" in f
+        ]
+        if qty:
+            if not cfg.get("shopify_location_id"):
+                raise RuntimeError("No location id; run a sync first")
+            data = self.gql(M_INVENTORY_SET, {"input": {
+                "name": "available", "reason": "correction",
+                "ignoreCompareQuantity": True, "quantities": qty,
+            }})
+            errs = (data.get("inventorySetQuantities") or {}).get("userErrors")
+            if errs:
+                raise RuntimeError(f"inventorySetQuantities: {errs}")
 
     # ── Locations ─────────────────────────────────────────────────────────────
 

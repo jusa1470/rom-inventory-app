@@ -23,6 +23,11 @@ TEXT_FILTERS: dict[str, str] = {"title": "title", "vendor": "vendor"}
 VALUE_FILTERS: dict[str, str] = {"status": "status", "category": "category_name", "type": "type"}
 LIST_FILTERS: dict[str, str] = {"genres": "genres", "tags": "tags"}
 
+_P_COLS = ("title", "vendor", "status", "product_type", "handle",
+           "category_id", "category_name", "type", "upc")
+_V_COLS = ("title", "upc", "description", "release_date", "variant_tags",
+           "price", "cost", "inventory_quantity", "weight")
+
 
 def split_list(value: Optional[str]) -> list[str]:
     """Genres/tags arrive as a JSON array or a comma list; return unique clean items."""
@@ -43,7 +48,7 @@ def split_list(value: Optional[str]) -> list[str]:
 
 
 def norm_code(v) -> Optional[str]:
-    """Barcode/UPC copied exactly as a string."""
+    """UPC copied exactly as a string."""
     return None if v is None else str(v)
 
 
@@ -83,8 +88,6 @@ def _save_variant(conn, product_id: str, v: dict) -> str:
         "variant_id": variant_id,
         "product_id": product_id,
         "title": v.get("title"),
-        "barcode": v.get("barcode"),
-        "sku": v.get("sku"),
         "upc": norm_code(_mf(v, "upc")),
         "description": _mf(v, "description"),
         "release_date": _mf(v, "release_date"),
@@ -191,8 +194,8 @@ def list_products(
         like = f"%{search}%"
         clauses.append("""(title LIKE ? OR vendor LIKE ? OR product_id IN (
             SELECT product_id FROM shopify_variants
-            WHERE upc LIKE ? OR barcode LIKE ? OR sku LIKE ?))""")
-        params += [like] * 5
+            WHERE upc LIKE ?))""")
+        params += [like] * 3
     for key, col in TEXT_FILTERS.items():
         for term in filters.get(key, []):
             clauses.append(f"{col} LIKE ?")
@@ -258,3 +261,28 @@ def get_filter_options() -> dict[str, list[str]]:
         "genres": tokens("genres"),
         "tags": tokens("tags"),
     }
+
+
+def update_local(product_id: str, product: dict, variants: list[dict]) -> None:
+    """Mirror a successful Shopify edit into the local cache."""
+    with transaction() as conn:
+        p = {k: product[k] for k in _P_COLS if k in product}
+        for k in ("tags", "genres"):
+            if k in product:
+                p[k] = ",".join(product[k])
+        if p:
+            sets = ", ".join(f"{k}=?" for k in p)
+            conn.execute(
+                f"UPDATE shopify_products SET {sets} WHERE product_id=?",
+                [*p.values(), product_id],
+            )
+        for v in variants:
+            cols = {k: v[k] for k in _V_COLS if k in v}
+            if "weight" in v:
+                cols["weight_unit"] = "POUNDS"
+            if cols:
+                sets = ", ".join(f"{k}=?" for k in cols)
+                conn.execute(
+                    f"UPDATE shopify_variants SET {sets} WHERE variant_id=?",
+                    [*cols.values(), v["id"]],
+                )
