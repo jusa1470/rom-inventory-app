@@ -11,6 +11,7 @@ from app.routes import products_api, settings_api, shopify_oauth_api, sync_api
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
 
 @asynccontextmanager

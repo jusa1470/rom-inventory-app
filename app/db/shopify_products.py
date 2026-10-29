@@ -42,6 +42,11 @@ def split_list(value: Optional[str]) -> list[str]:
     return list(items)
 
 
+def norm_code(v) -> Optional[str]:
+    """Barcode/UPC copied exactly as a string."""
+    return None if v is None else str(v)
+
+
 def _mf(node: dict, key: str) -> Optional[str]:
     return (node.get(key) or {}).get("value")
 
@@ -80,7 +85,7 @@ def _save_variant(conn, product_id: str, v: dict) -> str:
         "title": v.get("title"),
         "barcode": v.get("barcode"),
         "sku": v.get("sku"),
-        "upc": _mf(v, "upc"),
+        "upc": norm_code(_mf(v, "upc")),
         "description": _mf(v, "description"),
         "release_date": _mf(v, "release_date"),
         "variant_tags": _mf(v, "variant_tags"),
@@ -113,6 +118,7 @@ def save_product(p: dict) -> None:
             "category_name": cat.get("name"),
             "genres": ",".join(split_list(_mf(p, "genres"))),
             "type": _mf(p, "type"),
+            "upc": norm_code(_mf(p, "upc")),
         })
         conn.execute(
             "UPDATE shopify_products SET last_synced=datetime('now') WHERE product_id=?",

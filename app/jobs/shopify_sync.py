@@ -78,7 +78,7 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
     if status == "done":
         db.upsert_config(last_shopify_sync=started)
 
-    logger.info("Shopify sync %s: %d products in %.1fs", status, synced, time.monotonic() - t0)
+    logger.debug("Shopify sync %s: %d products in %.1fs", status, synced, time.monotonic() - t0)
     db.log_sync("shopify_sync", status, f"synced:{synced} errors:{errors}")
     update(job_id, progress=synced + errors,
            message=f"{status.capitalize()} - {synced} products synced, {errors} errors")

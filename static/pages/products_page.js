@@ -245,6 +245,7 @@ export class ProductsPage {
         ${item('Product type', p.product_type)}
         ${item('Genres', listText(p.genres))}
         ${item('Type', p.type)}
+        ${item('UPC', p.upc)}
         ${item('Tags', listText(p.tags))}
         ${item('Last synced', Fmt.datetime(p.last_synced))}
       </div>

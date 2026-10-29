@@ -6,6 +6,7 @@ import json
 PRODUCT_METAFIELDS: list[tuple[str, str, str]] = [
     ("genres", "shopify_genres_ns", "shopify_genres_key"),
     ("type", "shopify_type_ns", "shopify_type_key"),
+    ("upc", "shopify_upc_ns", "shopify_upc_key"),
 ]
 
 VARIANT_METAFIELDS: list[tuple[str, str, str]] = [
@@ -65,6 +66,7 @@ query GetProducts($first: Int!, $after: String, $query: String, $variantFirst: I
 			category { id name }
 			genres: metafield(namespace: $genresNamespace, key: $genresKey) { value }
 			type: metafield(namespace: $typeNamespace, key: $typeKey) { value }
+			upc: metafield(namespace: $upcNamespace, key: $upcKey) { value }
 			media(first: 3) { nodes { id preview { image { url } } } }
 			variants(first: $variantFirst) {
 				pageInfo { hasNextPage endCursor }
@@ -119,6 +121,7 @@ query BulkStatus($id: ID!) {
 BULK_PRODUCT_MF: list[tuple[str, str, str]] = [
     ("genres", "shopify_genres_ns", "shopify_genres_key"),
     ("type", "shopify_type_ns", "shopify_type_key"),
+    ("upc", "shopify_upc_ns", "shopify_upc_key")
 ]
 BULK_VARIANT_MF: list[tuple[str, str, str]] = [
     ("upc", "shopify_upc_ns", "shopify_upc_key"),

@@ -3,6 +3,7 @@ import { Toast } from '../components/toast.js';
 import { Fmt, esc } from '../util.js';
 
 const POLL_MS = 1000;
+const EXPORT_RE = /preparing the export/i;
 const LOG_BADGES = { done: 'badge-new', partial: 'badge-used', cancelled: 'badge-draft', error: 'badge-error' };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -74,16 +75,19 @@ export class DashboardPage {
     const bar = this.$('sync-bar');
     const done = job.progress || 0;
     const total = job.total || 0;
-    if (total > 0) {
+    const elapsed = this._startedAt ? ((Date.now() - this._startedAt) / 1000).toFixed(0) : null;
+    const timeStr = elapsed && elapsed > 0 ? ` — ${elapsed}s` : '';
+    const exporting = EXPORT_RE.test(job.message || '');
+    if (total > 0 && !exporting) {
       const pct = Math.min(100, Math.round((done / total) * 100));
       bar.classList.remove('indeterminate');
       bar.style.width = `${pct}%`;
       this.$('sync-msg').textContent =
-        `${done.toLocaleString()} of ${total.toLocaleString()} products (${pct}%)`;
+        `${done.toLocaleString()} of ${total.toLocaleString()} products (${pct}%)${timeStr}`;
     } else {
       bar.classList.add('indeterminate');
       bar.style.width = '';
-      this.$('sync-msg').textContent = job.message || '…';
+      this.$('sync-msg').textContent = (job.message || '…') + timeStr;
     }
   }
 
@@ -111,6 +115,7 @@ export class DashboardPage {
 
   async _follow(jobId) {
     this._jobId = jobId;
+    this._startedAt = Date.now();
     this._setRunning(true);
     try {
       this._setProgress({});
@@ -127,6 +132,7 @@ export class DashboardPage {
       Toast.error(e.message);
     } finally {
       this._jobId = null;
+      this._startedAt = null;
       this._setRunning(false);
     }
     if (!this._destroyed) await Promise.all([this._loadStats(), this._loadLog()]);
@@ -138,7 +144,11 @@ export class DashboardPage {
     else if (job.status === 'cancelled') Toast.info('Sync cancelled');
     else if (result.status === 'partial') {
       Toast.warning(`Synced ${result.synced} products, ${result.errors} errors`);
-    } else Toast.success(`Sync complete - ${result.synced ?? 0} products`);
+    } else {
+      const secs = this._startedAt ? ((Date.now() - this._startedAt) / 1000).toFixed(0) : null;
+      const timeStr = secs ? ` in ${secs}s` : '';
+      Toast.success(`Sync complete — ${result.synced ?? 0} products${timeStr}`);
+    }
   }
 
   async _cancel() {

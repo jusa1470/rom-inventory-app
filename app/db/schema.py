@@ -37,6 +37,7 @@ MIGRATIONS: list[str] = [
         category_name TEXT,
         genres        TEXT,
         type          TEXT,
+        upc           TEXT,
         last_synced   TEXT DEFAULT (datetime('now'))
     );
 
@@ -52,6 +53,7 @@ MIGRATIONS: list[str] = [
         variant_tags        TEXT,
         price               TEXT,
         cost                TEXT,
+        media_id            TEXT,
         taxable             INTEGER DEFAULT 1,
         inventory_item_id   TEXT,
         inventory_quantity  INTEGER DEFAULT 0,
@@ -59,13 +61,13 @@ MIGRATIONS: list[str] = [
         weight_unit         TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS shopify_images (
+    CREATE TABLE shopify_images (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        variant_id  TEXT NOT NULL REFERENCES shopify_variants(variant_id) ON DELETE CASCADE,
-        media_id    TEXT,
+        product_id  TEXT NOT NULL REFERENCES shopify_products(product_id) ON DELETE CASCADE,
+        media_id    TEXT NOT NULL,
         url         TEXT,
         position    INTEGER DEFAULT 0,
-        UNIQUE(variant_id, media_id)
+        UNIQUE(product_id, media_id)
     );
 
     CREATE TABLE IF NOT EXISTS sync_log (
@@ -77,25 +79,12 @@ MIGRATIONS: list[str] = [
     );
 
     CREATE INDEX IF NOT EXISTS idx_products_title    ON shopify_products(title);
+    CREATE INDEX IF NOT EXISTS idx_products_upc      ON shopify_products(upc);
     CREATE INDEX IF NOT EXISTS idx_variants_product  ON shopify_variants(product_id);
     CREATE INDEX IF NOT EXISTS idx_variants_upc      ON shopify_variants(upc);
     CREATE INDEX IF NOT EXISTS idx_variants_barcode  ON shopify_variants(barcode);
     CREATE INDEX IF NOT EXISTS idx_variants_sku      ON shopify_variants(sku);
-    CREATE INDEX IF NOT EXISTS idx_images_variant    ON shopify_images(variant_id);
-    """,
-    # 2: images belong to the product; each variant points at one of them (media_id)
-    """
-    DROP TABLE IF EXISTS shopify_images;
-    CREATE TABLE shopify_images (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        product_id  TEXT NOT NULL REFERENCES shopify_products(product_id) ON DELETE CASCADE,
-        media_id    TEXT NOT NULL,
-        url         TEXT,
-        position    INTEGER DEFAULT 0,
-        UNIQUE(product_id, media_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_images_product ON shopify_images(product_id);
-    ALTER TABLE shopify_variants ADD COLUMN media_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_images_product    ON shopify_images(product_id);
     """,
 ]
 
