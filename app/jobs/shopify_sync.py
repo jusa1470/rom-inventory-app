@@ -57,7 +57,7 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
         if is_cancelled(job_id):
             break
         try:
-            db.save_product(node)
+            db.save_shopify_product(node)
             synced += 1
         except Exception:
             errors += 1

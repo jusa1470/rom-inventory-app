@@ -104,7 +104,7 @@ def _save_variant(conn, product_id: str, v: dict) -> str:
     return variant_id
 
 
-def save_product(p: dict) -> None:
+def save_shopify_product(p: dict) -> None:
     """Upsert one Shopify product node with its variants and variant images."""
     product_id = strip_gid(p["id"])
     cat = p.get("category") or {}

@@ -1,4 +1,5 @@
 import html
+import json
 import logging
 import threading
 from datetime import datetime
@@ -57,15 +58,62 @@ def parse_order_items(page: str) -> list[dict]:
         if len(lines) < 2:
             continue
         # title, [artist], sku/upc
+        a = tds[0].find("a")
         items.append({
             "position": len(items),
             "title": html.unescape(lines[0]),
             "artist": html.unescape(lines[1]) if len(lines) >= 3 else "",
+            "sku": lines[-1].rsplit("/", 1)[0] if "/" in lines[-1] else None,
+            "href": a["href"] if a else None,
+            "format": _txt(tds[4]),
             "upc": lines[-1].rsplit("/", 1)[-1],
             "quantity": int(_txt(tds[1]) or 0),
             "price": _money(_txt(tds[5])),
         })
     return items
+
+
+def _info(soup, label):
+    for li in soup.select("#product-primaryinfo li"):
+        sp = li.find("span")
+        if sp and sp.get_text(strip=True).rstrip(":").lower() == label.lower():
+            return li.get_text(" ", strip=True)[len(sp.get_text(strip=True)):].strip() or None
+    return None
+
+
+def _val(soup, id_):
+    el = soup.find("input", id=id_)
+    return el.get("value") if el else None
+
+
+def parse_product(page: str) -> dict:
+    soup = BeautifulSoup(page, "lxml")
+    ld = {}
+    s = soup.select_one("script.ProductPageStrData")
+    if s:
+        try:
+            ld = json.loads(s.string or s.get_text())
+        except ValueError:
+            pass
+    fmt = None
+    for li in soup.select(".aec-product-title li"):
+        sp = li.find("span")
+        if sp and sp.get_text(strip=True) == "Format:":
+            fmt = li.get_text(" ", strip=True)[len("Format:"):].strip()
+            break
+    price = (ld.get("offers") or {}).get("price") or _txt(soup.select_one(".aec-listing-price"))
+    new = soup.select_one(".aec-new-price strong")
+    return {
+        "title": _txt(soup.select_one("h2.title-h2")) or _val(soup, "album"),
+        "artist": _val(soup, "artist"),
+        "vendor": _info(soup, "Label") or ld.get("brand"),
+        "product_type": fmt,
+        "upc": _info(soup, "UPC") or _val(soup, "upc_cd"),
+        "sku": _info(soup, "Product ID"),
+        "price": _money(str(price)) if price else None,
+        "your_price": _money(_txt(new)) if new else None,
+        "wmsid": _val(soup, "wmsid"),
+    }
 
 
 class WebamiClient:
@@ -119,3 +167,6 @@ class WebamiClient:
 
     def get_order_items(self, guid: str) -> list[dict]:
         return parse_order_items(self._get(f"/webami/vieworder/{guid}"))
+
+    def get_product(self, href: str) -> dict:
+        return parse_product(self._get(href))

@@ -16,8 +16,16 @@ def save_order(order: dict, items: list[dict]) -> None:
         )
         conn.execute("DELETE FROM webami_order_items WHERE order_guid=?", (order["guid"],))
         conn.executemany(
-            "INSERT INTO webami_order_items (order_guid, position, upc, title, artist, quantity, price) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [(order["guid"], i["position"], i["upc"], i["title"], i["artist"],
-              i["quantity"], i["price"]) for i in items],
+            "INSERT INTO webami_order_items "
+            "(order_guid, position, upc, sku, href, format, title, artist, quantity, price) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(order["guid"], i["position"], i["upc"], i["sku"], i["href"], i["format"],
+              i["title"], i["artist"], i["quantity"], i["price"]) for i in items],
+        )
+        conn.execute(
+            "UPDATE webami_order_items SET product_id = COALESCE("
+            "(SELECT product_id FROM webami_product_ids WHERE kind='upc' AND value=webami_order_items.upc),"
+            "(SELECT product_id FROM webami_product_ids WHERE kind='sku' AND value=webami_order_items.sku)) "
+            "WHERE order_guid=? AND product_id IS NULL",
+            (order["guid"],),
         )
