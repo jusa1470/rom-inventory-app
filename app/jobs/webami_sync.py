@@ -5,6 +5,7 @@ import time
 from app import config, db
 from app.jobs.tracker import is_cancelled, update
 from app.webami import WebamiClient
+from app.webami.webami_client import find_match
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +23,34 @@ def _resolve(client: WebamiClient, job_id: str) -> int:
     update(job_id, total=len(pending), progress=0, unit="order items", message=f"Resolving {len(pending)} order items…")
     errors = done = 0
 
-    def fetch(i):
+    def _try(fn):
         try:
-            return client.get_product(i["href"]) if i["href"] else None
+            return fn()
         except Exception:
-            logger.warning("WebAMI product page failed: %s", i["href"], exc_info=True)
+            logger.warning("WebAMI lookup failed", exc_info=True)
             return None
+
+    def _page(href):
+        p = _try(lambda: client.get_product(href)) if href else None
+        return p if p and p.get("title") else None
+
+    def fetch(i):
+        page = _page(i["href"])
+        if page:
+            return page, i["href"]
+        searches = []
+        if i["upc"]:
+            searches.append(lambda: client.search_upc(i["upc"]))
+        searches.append(lambda: client.search_site(i["title"], i["artist"], i["format"]))
+        for search in searches:
+            res = _try(search)
+            upc = res and find_match(res, i["title"], i["artist"], i["format"])
+            if upc:
+                href = f"/{upc}"
+                page = _page(href)
+                if page:
+                    return page, href
+        return None, None
 
     start = time.monotonic()
     with ThreadPoolExecutor(config.WEBAMI_WORKERS_MAX) as pool:
@@ -40,9 +63,11 @@ def _resolve(client: WebamiClient, job_id: str) -> int:
             i = futs[fut]
             extra = [("upc", i["upc"]), ("sku", i["sku"])]
             try:
-                page = fut.result()
+                page, href = fut.result()
                 if page:
-                    db.save_webami_product({**page, "href": i["href"]}, [(k, v) for k, v in extra if k == "upc" or v == page.get("sku")])
+                    ids = extra if href != i["href"] else [
+                        (k, v) for k, v in extra if k == "upc" or v == page.get("sku")]
+                    db.save_webami_product({**page, "href": href}, ids)
                 else:  # page gone: build from the order line
                     db.save_webami_product({
                         "title": i["title"], "artist": i["artist"],

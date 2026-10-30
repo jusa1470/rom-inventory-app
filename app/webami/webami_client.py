@@ -9,10 +9,16 @@ import requests
 from bs4 import BeautifulSoup
 
 from app import config
+from app.db.webami_products import norm
 from app.webami.limiter import AdaptiveLimiter
 
 logger = logging.getLogger(__name__)
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+FORMATS = {
+    "LP": "LP Vinyl",
+    "CD": "CD",
+    "Cassette": "Cassette",
+}  # order-line format -> search format; add others as found
 
 
 def _txt(el) -> str:
@@ -120,6 +126,28 @@ def parse_product(page: str) -> dict:
     }
 
 
+def simplify(t: str) -> str:
+    return re.sub(r"[\[\(].*?[\]\)]", " ", t or "").strip()
+
+
+def parse_search(page: str) -> list[dict]:
+    soup = BeautifulSoup(page, "lxml")
+    return [{
+        "upc": a["href"].strip("/").rsplit("/", 1)[-1],
+        "title": _txt(a.select_one(".aec-gstitle")),
+        "artist": _txt(a.select_one(".aec-gspersonname")),
+        "format": _txt(a.select_one(".aec-gsformat")),
+    } for a in soup.select("a.aec-gsitemsearch")]
+
+
+def find_match(results: list[dict], title: str, artist: str, fmt: str) -> str | None:
+    t, a, f = norm(simplify(title)), norm(artist), norm(FORMATS.get(fmt, fmt))
+    hits = [r for r in results
+            if norm(simplify(r["title"])) == t and norm(r["artist"]) == a
+            and (not f or f in norm(r["format"]) or norm(r["format"]) in f)]
+    return hits[0]["upc"] if len(hits) == 1 else None  # ambiguous = no match
+
+
 class WebamiClient:
     def __init__(self, base_url: str, username: str, password: str):
         self.base = base_url.rstrip("/")
@@ -154,7 +182,7 @@ class WebamiClient:
         for _ in range(4):
             with self.limiter:
                 try:
-                    r = self._session().get(f"{self.base}{path}", params=params, timeout=30)
+                    r = self._session().get(path if path.startswith("http") else f"{self.base}{path}", params=params, timeout=30)
                 except requests.Timeout:
                     self.limiter.throttled()
                     continue
@@ -187,3 +215,12 @@ class WebamiClient:
         html_ = self._get(href)
         data = parse_product(html_)
         return data
+    
+    def search_upc(self, upc: str) -> list[dict]:
+        return parse_search(self._get(
+            "https://ac.aent-m.com/api/s24ac", {"q": upc, "mod": "AP", "tid": 1}))
+
+    def search_site(self, title: str, artist: str, fmt: str) -> list[dict]:
+        return parse_search(self._get("/search", {
+            "mod": "AP", "q": f"{simplify(title)} {artist}".strip(),
+            "ft": FORMATS.get(fmt, fmt)}))
