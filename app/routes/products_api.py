@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from app import config, db
 from app.auth import get_creds, require_session
 from app.db.connection import strip_gid
-from app.shopify.client import ShopifyClient
+from app.shopify.shopify_client import ShopifyClient
 
 router = APIRouter(
     prefix="/api/products", tags=["products"], dependencies=[Depends(require_session)]

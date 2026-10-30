@@ -8,8 +8,9 @@ from app.jobs.tracker import (
     start,
     update,
 )
+from app.jobs.webami_sync import run_webami_sync
 
 __all__: list[str] = [
     "cancel", "create", "get", "get_running", "is_cancelled",
-    "run_shopify_sync", "start", "update",
+    "run_shopify_sync", "run_webami_sync", "start", "update",
 ]

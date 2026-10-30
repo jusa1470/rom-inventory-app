@@ -7,9 +7,17 @@ const EXPORT_RE = /preparing the export/i;
 const LOG_BADGES = { done: 'badge-new', partial: 'badge-used', cancelled: 'badge-draft', error: 'badge-error' };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+const SYNCS = [
+  { key: 'shopify', name: 'Shopify Sync', url: '/api/sync/shopify', unit: 'products', full: true,
+    meta: 'Pull products, variants, and variant images from Shopify' },
+  { key: 'webami', name: 'WebAMI Sync', url: '/api/sync/webami', unit: 'orders',
+    meta: 'Pull new WebAMI orders and order items' },
+];
+
 export class DashboardPage {
   constructor() {
-    this._jobId = null;
+    this._jobs = {};
+    this._starts = {};
     this._destroyed = false;
   }
 
@@ -33,97 +41,101 @@ export class DashboardPage {
           </div>
         </div>
 
-        <div class="sync-card">
-          <div class="sync-card-info">
-            <div class="sync-card-title">Shopify Sync</div>
-            <div class="sync-card-meta">Pull products, variants and variant images from Shopify</div>
-            <div id="sync-progress" style="display:none">
-            <div class="progress-bar-wrap"><div class="progress-bar indeterminate" id="sync-bar"></div></div>
-              <div class="progress-msg" id="sync-msg">Starting…</div>
+        ${SYNCS.map(s => `
+          <div class="sync-card" style="margin-bottom:12px">
+            <div class="sync-card-info">
+              <div class="sync-card-title">${s.name}</div>
+              <div class="sync-card-meta">${s.meta}</div>
+              <div id="progress-${s.key}" style="display:none">
+                <div class="progress-bar-wrap"><div class="progress-bar indeterminate" id="bar-${s.key}"></div></div>
+                <div class="progress-msg" id="msg-${s.key}">Starting…</div>
+              </div>
             </div>
-          </div>
-          <div class="sync-actions">
-            <button class="btn btn-primary" id="btn-sync">Sync</button>
-            <button class="btn btn-ghost" id="btn-full">Full sync</button>
-            <button class="btn btn-ghost btn-sm" id="btn-cancel" style="display:none">Cancel</button>
-          </div>
-        </div>
+            <div class="sync-actions">
+              <button class="btn btn-primary" id="btn-${s.key}">Sync</button>
+              ${s.full ? `<button class="btn btn-ghost" id="btn-full-${s.key}">Full sync</button>` : ''}
+              <button class="btn btn-ghost btn-sm" id="btn-cancel-${s.key}" style="display:none">Cancel</button>
+            </div>
+          </div>`).join('')}
 
         <div class="section-label">Recent activity</div>
         <div id="log-list"></div>
       </div>`;
 
     this.$ = id => this.c.querySelector('#' + id);
-    this.$('btn-sync').addEventListener('click', () => this._start(false));
-    this.$('btn-full').addEventListener('click', () => this._start(true));
-    this.$('btn-cancel').addEventListener('click', () => this._cancel());
+    SYNCS.forEach(s => {
+      this.$(`btn-${s.key}`).addEventListener('click', () => this._start(s, false));
+      if (s.full) this.$(`btn-full-${s.key}`).addEventListener('click', () => this._start(s, true));
+      this.$(`btn-cancel-${s.key}`).addEventListener('click', () => this._cancel(s));
+    });
 
     await Promise.all([this._loadStats(), this._loadLog()]);
-    this._resumeRunning();
+    SYNCS.forEach(s => this._resumeRunning(s));
   }
 
-  _setRunning(running) {
+  _setRunning(s, running) {
     if (this._destroyed) return;
-    this.$('btn-sync').disabled = running;
-    this.$('btn-full').disabled = running;
-    this.$('btn-cancel').style.display = running ? 'inline-flex' : 'none';
-    this.$('sync-progress').style.display = running ? 'block' : 'none';
+    this.$(`btn-${s.key}`).disabled = running;
+    if (s.full) this.$(`btn-full-${s.key}`).disabled = running;
+    this.$(`btn-cancel-${s.key}`).style.display = running ? 'inline-flex' : 'none';
+    this.$(`progress-${s.key}`).style.display = running ? 'block' : 'none';
   }
 
-  _setProgress(job) {
+  _setProgress(s, job) {
     if (this._destroyed) return;
-    const bar = this.$('sync-bar');
+    const bar = this.$(`bar-${s.key}`);
+    const msg = this.$(`msg-${s.key}`);
     const done = job.progress || 0;
     const total = job.total || 0;
-    const elapsed = this._startedAt ? ((Date.now() - this._startedAt) / 1000).toFixed(0) : null;
+    const t0 = this._starts[s.key];
+    const elapsed = t0 ? ((Date.now() - t0) / 1000).toFixed(0) : null;
     const timeStr = elapsed && elapsed > 0 ? ` — ${elapsed}s` : '';
     const exporting = EXPORT_RE.test(job.message || '');
     if (total > 0 && !exporting) {
       const pct = Math.min(100, Math.round((done / total) * 100));
       bar.classList.remove('indeterminate');
       bar.style.width = `${pct}%`;
-      this.$('sync-msg').textContent =
-        `${done.toLocaleString()} of ${total.toLocaleString()} products (${pct}%)${timeStr}`;
+      msg.textContent = `${done.toLocaleString()} of ${total.toLocaleString()} ${s.unit} (${pct}%)${timeStr}`;
     } else {
       bar.classList.add('indeterminate');
       bar.style.width = '';
-      this.$('sync-msg').textContent = (job.message || '…') + timeStr;
+      msg.textContent = (job.message || '…') + timeStr;
     }
   }
 
-  async _start(full) {
+  async _start(s, full) {
     try {
-      const { job_id } = await API.post(`/api/sync/shopify?full=${full}`);
-      await this._follow(job_id);
+      const { job_id } = await API.post(s.full ? `${s.url}?full=${full}` : s.url);
+      await this._follow(s, job_id);
     } catch (e) {
       if (e.status === 409) {
         Toast.warning(e.message);
-        this._resumeRunning();
+        this._resumeRunning(s);
       } else {
         Toast.error(e.message);
       }
     }
   }
 
-  async _resumeRunning() {
+  async _resumeRunning(s) {
     try {
       const { jobs } = await API.get('/api/sync/running');
-      const job = jobs.find(j => j.name === 'Shopify Sync');
-      if (job && !this._destroyed) await this._follow(job.id);
+      const job = jobs.find(j => j.name === s.name);
+      if (job && !this._destroyed) await this._follow(s, job.id);
     } catch (_) { /* non-critical */ }
   }
 
-  async _follow(jobId) {
-    this._jobId = jobId;
-    this._startedAt = Date.now();
-    this._setRunning(true);
+  async _follow(s, jobId) {
+    this._jobs[s.key] = jobId;
+    this._starts[s.key] = Date.now();
+    this._setRunning(s, true);
     try {
-      this._setProgress({});
+      this._setProgress(s, {});
       while (!this._destroyed) {
         const job = await API.get(`/api/sync/status/${jobId}`);
-        this._setProgress(job);
+        this._setProgress(s, job);
         if (job.status !== 'running') {
-          this._announce(job);
+          this._announce(s, job);
           break;
         }
         await sleep(POLL_MS);
@@ -131,30 +143,31 @@ export class DashboardPage {
     } catch (e) {
       Toast.error(e.message);
     } finally {
-      this._jobId = null;
-      this._startedAt = null;
-      this._setRunning(false);
+      this._jobs[s.key] = null;
+      this._starts[s.key] = null;
+      this._setRunning(s, false);
     }
     if (!this._destroyed) await Promise.all([this._loadStats(), this._loadLog()]);
   }
 
-  _announce(job) {
+  _announce(s, job) {
     const result = job.result || {};
     if (job.status === 'error') Toast.error(job.error || 'Sync failed');
     else if (job.status === 'cancelled') Toast.info('Sync cancelled');
     else if (result.status === 'partial') {
-      Toast.warning(`Synced ${result.synced} products, ${result.errors} errors`);
+      Toast.warning(`Synced ${result.synced} ${s.unit}, ${result.errors} errors`);
     } else {
-      const secs = this._startedAt ? ((Date.now() - this._startedAt) / 1000).toFixed(0) : null;
-      const timeStr = secs ? ` in ${secs}s` : '';
-      Toast.success(`Sync complete — ${result.synced ?? 0} products${timeStr}`);
+      const t0 = this._starts[s.key];
+      const secs = t0 ? ((Date.now() - t0) / 1000).toFixed(0) : null;
+      Toast.success(`${s.name} complete — ${result.synced ?? 0} ${s.unit}${secs ? ` in ${secs}s` : ''}`);
     }
   }
 
-  async _cancel() {
-    if (!this._jobId) return;
+  async _cancel(s) {
+    const id = this._jobs[s.key];
+    if (!id) return;
     try {
-      await API.post(`/api/sync/cancel/${this._jobId}`);
+      await API.post(`/api/sync/cancel/${id}`);
       Toast.info('Cancelling…');
     } catch (e) {
       Toast.error(e.message);

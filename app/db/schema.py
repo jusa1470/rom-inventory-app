@@ -75,12 +75,34 @@ MIGRATIONS: list[str] = [
         details    TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
+    
+    CREATE TABLE webami_orders (
+        guid         TEXT PRIMARY KEY,
+        number       TEXT NOT NULL,
+        name         TEXT,
+        submitted_at TEXT,
+        sku_count    INTEGER DEFAULT 0,
+        last_synced  TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE webami_order_items (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_guid TEXT NOT NULL REFERENCES webami_orders(guid) ON DELETE CASCADE,
+        position   INTEGER NOT NULL,
+        upc        TEXT,
+        title      TEXT,
+        artist     TEXT,
+        quantity   INTEGER DEFAULT 0,
+        price      REAL,
+        UNIQUE(order_guid, position)
+    );
 
-    CREATE INDEX IF NOT EXISTS idx_products_title    ON shopify_products(title);
-    CREATE INDEX IF NOT EXISTS idx_products_upc      ON shopify_products(upc);
-    CREATE INDEX IF NOT EXISTS idx_variants_product  ON shopify_variants(product_id);
-    CREATE INDEX IF NOT EXISTS idx_variants_upc      ON shopify_variants(upc);
-    CREATE INDEX IF NOT EXISTS idx_images_product    ON shopify_images(product_id);
+    CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);
+    CREATE INDEX IF NOT EXISTS idx_products_upc         ON shopify_products(upc);
+    CREATE INDEX IF NOT EXISTS idx_variants_product     ON shopify_variants(product_id);
+    CREATE INDEX IF NOT EXISTS idx_variants_upc         ON shopify_variants(upc);
+    CREATE INDEX IF NOT EXISTS idx_images_product       ON shopify_images(product_id);
+    CREATE INDEX IF NOT EXISTS idx_webami_items_order   ON webami_order_items(order_guid);
+    CREATE INDEX IF NOT EXISTS idx_webami_items_upc     ON webami_order_items(upc);
     """,
 ]
 
