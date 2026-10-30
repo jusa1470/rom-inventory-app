@@ -236,7 +236,7 @@ export class SettingsPage {
     const data = new FormData(form);
     const payload = {};
     for (const name of TEXT_FIELDS) payload[name] = String(data.get(name) ?? '').trim();
-    payload.page_size = parseInt(data.get('page_size'), 10);
+    payload.page_size = parseInt(String(data.get('page_size')), 10);
     payload.dry_run = form.elements.dry_run.checked;
 
     btn.disabled = true;

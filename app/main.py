@@ -7,10 +7,13 @@ from pathlib import Path
 import uvicorn
 
 from app import auth, db
-from app.routes import products_api, settings_api, shopify_oauth_api, sync_api
+from app.routes import products_api, settings_api, shopify_oauth_api, sync_api, orders_api
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
 
@@ -22,11 +25,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(auth.router)
-app.include_router(settings_api.router)
-app.include_router(sync_api.router)
+app.include_router(orders_api.router)
 app.include_router(products_api.router)
+app.include_router(settings_api.router)
 app.include_router(shopify_oauth_api.router)
 app.include_router(shopify_oauth_api.callback_router)
+app.include_router(sync_api.router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

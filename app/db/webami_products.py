@@ -3,7 +3,7 @@ import re
 from app.db.connection import get_conn, rows, transaction
 
 _COLS = ("title", "artist", "vendor", "product_type", "sku", "upc",
-         "price", "your_price", "wmsid")
+         "price", "your_price", "wmsid", "href")
 
 
 def norm(s) -> str:
@@ -18,10 +18,10 @@ def fingerprint(d: dict) -> str:
 def get_unresolved_items() -> list[dict]:
     return rows(get_conn().execute(
         "SELECT upc, sku, href, title, artist, format, price FROM webami_order_items "
-        "WHERE product_id IS NULL AND upc IS NOT NULL GROUP BY upc").fetchall())
+        "WHERE product_id IS NULL GROUP BY COALESCE(upc, sku, href)").fetchall())
 
 
-def save_webami_product(data: dict, extra_ids=(), update: bool = True) -> int:
+def save_webami_product(data: dict, extra_ids=(), update: bool = True, use_fingerprint: bool = False) -> int:
     """Find (by wmsid/upc/sku alias, then fingerprint) or create the product;
     record all ids as aliases and link matching order items."""
     ids = [("wmsid", data.get("wmsid")), ("upc", data.get("upc")),
@@ -37,7 +37,7 @@ def save_webami_product(data: dict, extra_ids=(), update: bool = True) -> int:
             if r:
                 pid = r[0]
                 break
-        if pid is None:
+        if pid is None and use_fingerprint:
             r = conn.execute(
                 "SELECT id FROM webami_products WHERE fingerprint=?", (fp,)).fetchone()
             pid = r[0] if r else None
@@ -64,3 +64,15 @@ def save_webami_product(data: dict, extra_ids=(), update: bool = True) -> int:
                     f"UPDATE webami_order_items SET product_id=? "
                     f"WHERE product_id IS NULL AND {kind}=?", (pid, val))
     return pid
+
+
+def get_webami_product(product_id: int):
+    conn = get_conn()
+    p = conn.execute("SELECT * FROM webami_products WHERE id=?", (product_id,)).fetchone()
+    if not p:
+        return None
+    p = dict(p)
+    p["ids"] = rows(conn.execute(
+        "SELECT kind, value, first_seen, last_seen FROM webami_product_ids "
+        "WHERE product_id=? ORDER BY kind, first_seen", (product_id,)).fetchall())
+    return p

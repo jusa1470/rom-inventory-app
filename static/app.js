@@ -1,18 +1,21 @@
 import { API, setUnauthorizedHandler } from './api.js';
 import { DashboardPage } from './pages/dashboard_page.js';
-import { renderLogin } from './pages/login_page.js';
+import { OrdersPage } from './pages/orders_page.js';
 import { ProductsPage } from './pages/products_page.js';
+import { renderLogin } from './pages/login_page.js';
 import { SettingsPage } from './pages/settings_page.js';
 
 const NAV = [
   { hash: '#dashboard', label: 'Dashboard' },
   { hash: '#products', label: 'Products' },
+  { hash: '#orders', label: 'Orders' },
   { hash: '#settings', label: 'Settings' },
 ];
 
 const PAGES = {
   '#dashboard': DashboardPage,
   '#products': ProductsPage,
+  '#orders': OrdersPage,
   '#settings': SettingsPage,
 };
 
@@ -33,7 +36,7 @@ function renderShell() {
     </div>`;
   document.getElementById('nav-logout').addEventListener('click', logout);
   root.querySelectorAll('.nav-btn[data-hash]').forEach(btn =>
-    btn.addEventListener('click', () => { location.hash = btn.dataset.hash; }));
+    btn.addEventListener('click', () => { location.hash = btn.getAttribute('data-hash'); }));
 }
 
 function baseHash(hash) {
@@ -44,7 +47,7 @@ function baseHash(hash) {
 async function navigate(hash) {
   const base = baseHash(hash);
   root.querySelectorAll('.nav-btn[data-hash]').forEach(btn =>
-    btn.classList.toggle('active', btn.dataset.hash === base));
+    btn.classList.toggle('active', btn.getAttribute('data-hash') === base));
   const content = document.getElementById('page-content');
   if (!content) return;
   if (currentPage && currentPage.destroy) currentPage.destroy();

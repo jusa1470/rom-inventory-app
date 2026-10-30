@@ -1,6 +1,7 @@
 import html
 import json
 import logging
+import re
 import threading
 from datetime import datetime
 
@@ -8,6 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app import config
+from app.webami.limiter import AdaptiveLimiter
 
 logger = logging.getLogger(__name__)
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -81,13 +83,15 @@ def _info(soup, label):
     return None
 
 
-def _val(soup, id_):
-    el = soup.find("input", id=id_)
-    return el.get("value") if el else None
+def _val(page, id_):
+    m = re.search(rf'<input[^>]*id="{id_}"[^>]*value="([^"]*)"', page)
+    return html.unescape(m.group(1)) if m else None
 
 
 def parse_product(page: str) -> dict:
-    soup = BeautifulSoup(page, "lxml")
+    head = page.find('class="main-title')
+    end = page.find('id="aec-product-description"')
+    soup = BeautifulSoup(page[max(head, 0):end if end > 0 else len(page)], "lxml")
     ld = {}
     s = soup.select_one("script.ProductPageStrData")
     if s:
@@ -104,15 +108,15 @@ def parse_product(page: str) -> dict:
     price = (ld.get("offers") or {}).get("price") or _txt(soup.select_one(".aec-listing-price"))
     new = soup.select_one(".aec-new-price strong")
     return {
-        "title": _txt(soup.select_one("h2.title-h2")) or _val(soup, "album"),
-        "artist": _val(soup, "artist"),
+        "title": _txt(soup.select_one("h2.title-h2")) or _val(page, "album"),
+        "artist": _val(page, "artist"),
         "vendor": _info(soup, "Label") or ld.get("brand"),
         "product_type": fmt,
-        "upc": _info(soup, "UPC") or _val(soup, "upc_cd"),
+        "upc": _info(soup, "UPC") or _val(page, "upc_cd"),
         "sku": _info(soup, "Product ID"),
         "price": _money(str(price)) if price else None,
         "your_price": _money(_txt(new)) if new else None,
-        "wmsid": _val(soup, "wmsid"),
+        "wmsid": _val(page, "wmsid"),
     }
 
 
@@ -121,6 +125,8 @@ class WebamiClient:
         self.base = base_url.rstrip("/")
         self._user, self._pw = username, password
         self._local = threading.local()
+        self.limiter = AdaptiveLimiter(
+            config.WEBAMI_WORKERS_START, config.WEBAMI_WORKERS_MIN, config.WEBAMI_WORKERS_MAX)
 
     def _login(self) -> requests.Session:
         s = requests.Session()
@@ -145,14 +151,23 @@ class WebamiClient:
         return self._local.s
 
     def _get(self, path: str, params: dict | None = None) -> str:
-        for _ in range(2):
-            r = self._session().get(f"{self.base}{path}", params=params, timeout=30)
+        for _ in range(4):
+            with self.limiter:
+                try:
+                    r = self._session().get(f"{self.base}{path}", params=params, timeout=30)
+                except requests.Timeout:
+                    self.limiter.throttled()
+                    continue
+            if r.status_code in (429, 503):
+                self.limiter.throttled(float(r.headers.get("Retry-After", 0) or 0))
+                continue
             if "logon" in r.url.lower():
                 self._local.s = None
                 continue
             r.raise_for_status()
+            self.limiter.success()
             return r.text
-        raise RuntimeError("WebAMI: session rejected")
+        raise RuntimeError("WebAMI: throttled or session rejected")
 
     def list_new_orders(self, known: set[str]) -> list[dict]:
         """Newest-first pages; stops once a page has nothing new."""
@@ -169,4 +184,6 @@ class WebamiClient:
         return parse_order_items(self._get(f"/webami/vieworder/{guid}"))
 
     def get_product(self, href: str) -> dict:
-        return parse_product(self._get(href))
+        html_ = self._get(href)
+        data = parse_product(html_)
+        return data

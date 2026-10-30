@@ -355,11 +355,14 @@ export class ProductsPage {
         const f = changed(r);
         if (!Object.keys(f).length) return null;
         if ('inventory_quantity' in f) {
-          f.inventory_quantity = parseInt(f.inventory_quantity, 10);
-          f.inventory_item_id = r.dataset.iid;
+          f.inventory_quantity = parseInt(String(f.inventory_quantity), 10);
         }
-        if ('weight' in f) f.weight = parseFloat(f.weight);
-        return { id: r.dataset.vid, ...f };
+        if ('weight' in f) f.weight = parseFloat(String(f.weight));
+        return {
+          id: r.getAttribute('data-vid') ?? '',
+          ...f,
+          ...('inventory_quantity' in f ? { inventory_item_id: r.getAttribute('data-iid') ?? '' } : {}),
+        };
       }).filter(Boolean);
       if (!Object.keys(product).length && !variants.length) return Modal.close();
       try {

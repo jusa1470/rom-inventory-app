@@ -12,6 +12,8 @@ const SYNCS = [
     meta: 'Pull products, variants, and variant images from Shopify' },
   { key: 'webami', name: 'WebAMI Sync', url: '/api/sync/webami', unit: 'orders',
     meta: 'Pull new WebAMI orders and order items' },
+  { key: 'webami-products', name: 'WebAMI Products', url: '/api/sync/webami-products',
+    unit: 'order items', hidden: true },
 ];
 
 export class DashboardPage {
@@ -31,17 +33,21 @@ export class DashboardPage {
       <div class="page">
         <div class="page-title">Dashboard</div>
         <div class="row" style="margin-bottom:20px">
-          <div class="stat-card">
-            <div class="stat-label">Products synced</div>
-            <div class="stat-value" id="stat-products">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Last sync</div>
-            <div class="stat-value small" id="stat-last-sync">—</div>
-          </div>
+          <div class="stat-card"><div class="stat-label">Products synced</div>
+            <div class="stat-value" id="stat-products">—</div></div>
+          <div class="stat-card"><div class="stat-label">Last Shopify sync</div>
+            <div class="stat-value small" id="stat-last-sync">—</div></div>
+          <div class="stat-card"><div class="stat-label">WebAMI orders</div>
+            <div class="stat-value" id="stat-orders">—</div></div>
+          <div class="stat-card"><div class="stat-label">WebAMI order items</div>
+            <div class="stat-value" id="stat-items">—</div></div>
+          <div class="stat-card"><div class="stat-label">WebAMI products</div>
+            <div class="stat-value" id="stat-wproducts">—</div></div>
+          <div class="stat-card"><div class="stat-label">Last WebAMI sync</div>
+            <div class="stat-value small" id="stat-last-webami">—</div></div>
         </div>
 
-        ${SYNCS.map(s => `
+        ${SYNCS.filter(s => !s.hidden).map(s => `
           <div class="sync-card" style="margin-bottom:12px">
             <div class="sync-card-info">
               <div class="sync-card-title">${s.name}</div>
@@ -53,6 +59,7 @@ export class DashboardPage {
             </div>
             <div class="sync-actions">
               <button class="btn btn-primary" id="btn-${s.key}">Sync</button>
+              ${s.key === 'webami' ? '<button class="btn btn-ghost" id="btn-webami-products">Fetch products</button>' : ''}
               ${s.full ? `<button class="btn btn-ghost" id="btn-full-${s.key}">Full sync</button>` : ''}
               <button class="btn btn-ghost btn-sm" id="btn-cancel-${s.key}" style="display:none">Cancel</button>
             </div>
@@ -63,11 +70,14 @@ export class DashboardPage {
       </div>`;
 
     this.$ = id => this.c.querySelector('#' + id);
-    SYNCS.forEach(s => {
+    SYNCS.filter(s => !s.hidden).forEach(s => {
       this.$(`btn-${s.key}`).addEventListener('click', () => this._start(s, false));
       if (s.full) this.$(`btn-full-${s.key}`).addEventListener('click', () => this._start(s, true));
       this.$(`btn-cancel-${s.key}`).addEventListener('click', () => this._cancel(s));
     });
+    const wp = SYNCS.find(s => s.key === 'webami-products');
+    const wm = SYNCS.find(s => s.key === 'webami');
+    this.$('btn-webami-products').addEventListener('click', () => this._start(wp, false, wm));
 
     await Promise.all([this._loadStats(), this._loadLog()]);
     SYNCS.forEach(s => this._resumeRunning(s));
@@ -79,6 +89,8 @@ export class DashboardPage {
     if (s.full) this.$(`btn-full-${s.key}`).disabled = running;
     this.$(`btn-cancel-${s.key}`).style.display = running ? 'inline-flex' : 'none';
     this.$(`progress-${s.key}`).style.display = running ? 'block' : 'none';
+    const fp = this.$('btn-webami-products');
+    if (fp && s.key === 'webami') fp.disabled = running;
   }
 
   _setProgress(s, job) {
@@ -89,13 +101,13 @@ export class DashboardPage {
     const total = job.total || 0;
     const t0 = this._starts[s.key];
     const elapsed = t0 ? ((Date.now() - t0) / 1000).toFixed(0) : null;
-    const timeStr = elapsed && elapsed > 0 ? ` — ${elapsed}s` : '';
+    const timeStr = (elapsed && Number(elapsed) > 0 ? ` — ${elapsed}s` : '') + (job.workers ? `\n(${job.workers} workers)` : '');
     const exporting = EXPORT_RE.test(job.message || '');
     if (total > 0 && !exporting) {
       const pct = Math.min(100, Math.round((done / total) * 100));
       bar.classList.remove('indeterminate');
       bar.style.width = `${pct}%`;
-      msg.textContent = `${done.toLocaleString()} of ${total.toLocaleString()} ${s.unit} (${pct}%)${timeStr}`;
+      msg.textContent = `${done.toLocaleString()} of ${total.toLocaleString()} ${job.unit || s.unit} (${pct}%)${timeStr}`;
     } else {
       bar.classList.add('indeterminate');
       bar.style.width = '';
@@ -103,10 +115,10 @@ export class DashboardPage {
     }
   }
 
-  async _start(s, full) {
+  async _start(s, full, ui = s) {
     try {
       const { job_id } = await API.post(s.full ? `${s.url}?full=${full}` : s.url);
-      await this._follow(s, job_id);
+      await this._follow(ui, job_id, s);
     } catch (e) {
       if (e.status === 409) {
         Toast.warning(e.message);
@@ -120,12 +132,12 @@ export class DashboardPage {
   async _resumeRunning(s) {
     try {
       const { jobs } = await API.get('/api/sync/running');
-      const job = jobs.find(j => j.name === s.name);
+      const job = jobs.find(j => j.name === s.name || (s.key === 'webami' && j.name === 'WebAMI Products'));
       if (job && !this._destroyed) await this._follow(s, job.id);
     } catch (_) { /* non-critical */ }
   }
 
-  async _follow(s, jobId) {
+  async _follow(s, jobId, runner = s) {
     this._jobs[s.key] = jobId;
     this._starts[s.key] = Date.now();
     this._setRunning(s, true);
@@ -135,7 +147,7 @@ export class DashboardPage {
         const job = await API.get(`/api/sync/status/${jobId}`);
         this._setProgress(s, job);
         if (job.status !== 'running') {
-          this._announce(s, job);
+          this._announce(runner, job);
           break;
         }
         await sleep(POLL_MS);
@@ -176,13 +188,18 @@ export class DashboardPage {
 
   async _loadStats() {
     try {
-      const [cfg, products] = await Promise.all([
+      const [cfg, products, w] = await Promise.all([
         API.get('/api/settings'),
         API.get('/api/products?per_page=1'),
+        API.get('/api/sync/webami-stats'),
       ]);
       if (this._destroyed) return;
       this.$('stat-products').textContent = products.total.toLocaleString();
       this.$('stat-last-sync').textContent = Fmt.datetime(cfg.last_shopify_sync);
+      this.$('stat-orders').textContent = w.orders.toLocaleString();
+      this.$('stat-items').textContent = w.items.toLocaleString();
+      this.$('stat-wproducts').textContent = w.products.toLocaleString();
+      this.$('stat-last-webami').textContent = Fmt.datetime(w.last_sync);
     } catch (e) {
       Toast.error('Failed to load stats: ' + e.message);
     }

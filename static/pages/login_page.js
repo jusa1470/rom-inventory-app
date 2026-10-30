@@ -11,14 +11,14 @@ export function renderLogin(root, onSuccess) {
         <button class="btn btn-primary">Unlock</button>
       </form>
     </div>`);
-  const form = box.querySelector('form');
+  const form = /** @type {HTMLElement} */ (box).querySelector('form');
   form.addEventListener('submit', async e => {
     e.preventDefault();
     try {
       await API.post('/api/login', { password: form.pw.value });
       onSuccess();
     } catch (err) {
-      box.querySelector('.err').textContent = err.message;
+      /** @type {HTMLElement} */ (box).querySelector('.err').textContent = err.message;
       form.pw.value = '';
     }
   });

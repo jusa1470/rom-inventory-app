@@ -9,3 +9,4 @@ credentials.json
 .vscode/
 vault.enc
 shopify_token.py
+*.log

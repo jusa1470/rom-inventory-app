@@ -1,5 +1,6 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 from app import config, db
 from app.jobs.tracker import is_cancelled, update
@@ -18,7 +19,7 @@ def run_webami_sync(job_id: str, base_url: str, username: str, password: str) ->
 
 def _resolve(client: WebamiClient, job_id: str) -> int:
     pending = db.get_unresolved_items()
-    update(job_id, total=len(pending), progress=0, message=f"Resolving {len(pending)} products…")
+    update(job_id, total=len(pending), progress=0, unit="order items", message=f"Resolving {len(pending)} order items…")
     errors = done = 0
 
     def fetch(i):
@@ -28,7 +29,8 @@ def _resolve(client: WebamiClient, job_id: str) -> int:
             logger.warning("WebAMI product page failed: %s", i["href"], exc_info=True)
             return None
 
-    with ThreadPoolExecutor(config.WEBAMI_WORKERS) as pool:
+    start = time.monotonic()
+    with ThreadPoolExecutor(config.WEBAMI_WORKERS_MAX) as pool:
         futs = {pool.submit(fetch, i): i for i in pending}
         for fut in as_completed(futs):
             if is_cancelled(job_id):
@@ -40,18 +42,19 @@ def _resolve(client: WebamiClient, job_id: str) -> int:
             try:
                 page = fut.result()
                 if page:
-                    db.save_webami_product(page, extra)
+                    db.save_webami_product({**page, "href": i["href"]}, [(k, v) for k, v in extra if k == "upc" or v == page.get("sku")])
                 else:  # page gone: build from the order line
                     db.save_webami_product({
                         "title": i["title"], "artist": i["artist"],
                         "product_type": i["format"], "upc": i["upc"],
-                        "sku": i["sku"], "price": i["price"],
-                    }, extra, update=False)
+                        "sku": i["sku"], "price": i["price"], "href": i["href"],
+                    }, extra, update=False, use_fingerprint=True)
             except Exception:
                 errors += 1
                 logger.exception("Error resolving WebAMI product %s", i["upc"])
             done += 1
-            update(job_id, progress=done, message=f"Resolved {done} of {len(pending)} products…")
+            update(job_id, progress=done, workers=client.limiter.limit,
+                   message=f"Resolved {done} of {len(pending)} order items…")
     return errors
 
 
@@ -59,10 +62,10 @@ def _sync(job_id, base_url, username, password) -> dict:
     client = WebamiClient(base_url, username, password)
     update(job_id, message="Listing WebAMI orders…")
     new = client.list_new_orders(db.get_known_order_guids())
-    update(job_id, total=len(new), message=f"Fetching {len(new)} new orders…")
+    update(job_id, total=len(new), unit="orders", message=f"Fetching {len(new)} new orders…")
     synced = errors = 0
 
-    with ThreadPoolExecutor(config.WEBAMI_WORKERS) as pool:
+    with ThreadPoolExecutor(config.WEBAMI_WORKERS_MAX) as pool:
         futs = {pool.submit(client.get_order_items, o["guid"]): o for o in new}
         for fut in as_completed(futs):
             if is_cancelled(job_id):
@@ -76,7 +79,7 @@ def _sync(job_id, base_url, username, password) -> dict:
             except Exception:
                 errors += 1
                 logger.exception("Error saving WebAMI order %s", order["guid"])
-            update(job_id, progress=synced + errors,
+            update(job_id, progress=synced + errors, workers=client.limiter.limit,
                    message=f"Synced {synced + errors} of {len(new)} orders…")
 
     if not is_cancelled(job_id):
@@ -86,3 +89,16 @@ def _sync(job_id, base_url, username, password) -> dict:
     update(job_id, progress=synced + errors,
            message=f"{status.capitalize()} - {synced} orders synced, {errors} errors")
     return {"status": status, "synced": synced, "errors": errors}
+
+
+def run_webami_resolve(job_id: str, base_url: str, username: str, password: str) -> dict:
+    try:
+        client = WebamiClient(base_url, username, password)
+        errors = _resolve(client, job_id)
+    except Exception as exc:
+        db.log_sync("webami_resolve", "error", str(exc))
+        raise
+    status = "cancelled" if is_cancelled(job_id) else "partial" if errors else "done"
+    db.log_sync("webami_resolve", status, f"errors:{errors}")
+    update(job_id, message=f"{status.capitalize()} - {errors} errors")
+    return {"status": status, "synced": db.get_webami_stats()["products"], "errors": errors}

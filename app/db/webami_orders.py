@@ -29,3 +29,45 @@ def save_order(order: dict, items: list[dict]) -> None:
             "WHERE order_guid=? AND product_id IS NULL",
             (order["guid"],),
         )
+
+
+def list_webami_orders(search: str = "", page: int = 1, per_page: int = 50) -> dict:
+    conn = get_conn()
+    where, params = "", []
+    if search:
+        like = f"%{search}%"
+        where = ("WHERE number LIKE ? OR name LIKE ? OR guid IN ("
+                 "SELECT order_guid FROM webami_order_items "
+                 "WHERE upc LIKE ? OR title LIKE ? OR artist LIKE ?)")
+        params = [like] * 5
+    total = conn.execute(f"SELECT COUNT(*) FROM webami_orders {where}", params).fetchone()[0]
+    items = rows(conn.execute(
+        f"SELECT o.*, (SELECT COALESCE(SUM(quantity),0) FROM webami_order_items i "
+        f"WHERE i.order_guid=o.guid) AS total_qty FROM webami_orders o {where} "
+        f"ORDER BY submitted_at DESC LIMIT ? OFFSET ?",
+        [*params, per_page, (max(page, 1) - 1) * per_page]).fetchall())
+    return {"items": items, "total": total}
+
+
+def get_webami_order(guid: str):
+    conn = get_conn()
+    order = conn.execute("SELECT * FROM webami_orders WHERE guid=?", (guid,)).fetchone()
+    if not order:
+        return None
+    order = dict(order)
+    order["items"] = rows(conn.execute(
+        "SELECT * FROM webami_order_items WHERE order_guid=? ORDER BY position",
+        (guid,)).fetchall())
+    return order
+
+
+def get_webami_stats() -> dict:
+    c = get_conn()
+    one = lambda sql: c.execute(sql).fetchone()[0]
+    return {
+        "orders": one("SELECT COUNT(*) FROM webami_orders"),
+        "items": one("SELECT COUNT(*) FROM webami_order_items"),
+        "products": one("SELECT COUNT(*) FROM webami_products"),
+        "last_sync": one("SELECT MAX(created_at) FROM sync_log "
+                         "WHERE action='webami_sync' AND status='done'"),
+    }
