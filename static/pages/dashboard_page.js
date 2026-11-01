@@ -60,6 +60,7 @@ export class DashboardPage {
             <div class="sync-actions">
               <button class="btn btn-primary" id="btn-${s.key}">Sync</button>
               ${s.key === 'webami' ? '<button class="btn btn-ghost" id="btn-webami-products">Fetch products</button>' : ''}
+              ${s.key === 'webami' ? '<button class="btn btn-ghost" id="btn-webami-refetch">Re-fetch all</button>' : ''}
               ${s.full ? `<button class="btn btn-ghost" id="btn-full-${s.key}">Full sync</button>` : ''}
               <button class="btn btn-ghost btn-sm" id="btn-cancel-${s.key}" style="display:none">Cancel</button>
             </div>
@@ -78,6 +79,10 @@ export class DashboardPage {
     const wp = SYNCS.find(s => s.key === 'webami-products');
     const wm = SYNCS.find(s => s.key === 'webami');
     this.$('btn-webami-products').addEventListener('click', () => this._start(wp, false, wm));
+    this.$('btn-webami-refetch').addEventListener('click', () => {
+      if (!confirm('Delete all WebAMI products and re-fetch them from WebAMI?')) return;
+      this._start({ ...wp, refetch: true }, false, wm);
+    });
 
     await Promise.all([this._loadStats(), this._loadLog()]);
     SYNCS.forEach(s => this._resumeRunning(s));
@@ -91,6 +96,8 @@ export class DashboardPage {
     this.$(`progress-${s.key}`).style.display = running ? 'block' : 'none';
     const fp = this.$('btn-webami-products');
     if (fp && s.key === 'webami') fp.disabled = running;
+    const rf = this.$('btn-webami-refetch');
+    if (rf && s.key === 'webami') rf.disabled = running;
   }
 
   _setProgress(s, job) {
@@ -117,7 +124,9 @@ export class DashboardPage {
 
   async _start(s, full, ui = s) {
     try {
-      const { job_id } = await API.post(s.full ? `${s.url}?full=${full}` : s.url);
+      const { job_id } = await API.post(s.full ? `${s.url}?full=${full}` : s.url
+        + (s.refetch ? `?refetch=true` : ``)
+      );
       await this._follow(ui, job_id, s);
     } catch (e) {
       if (e.status === 409) {

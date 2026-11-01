@@ -15,6 +15,7 @@ WEBAMI_PAGE_SIZE = 250
 WEBAMI_WORKERS_START = 4
 WEBAMI_WORKERS_MIN = 1
 WEBAMI_WORKERS_MAX = 16
+WEBAMI_MATCH_MIN = 0.7
 
 # Must exactly match a redirect URL registered on the Shopify app.
 OAUTH_REDIRECT_URI = os.environ.get(

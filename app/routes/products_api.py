@@ -7,6 +7,7 @@ from app import config, db
 from app.auth import get_creds, require_session
 from app.db.connection import strip_gid
 from app.shopify.shopify_client import ShopifyClient
+from app.webami.webami_client import WebamiClient
 
 router = APIRouter(
     prefix="/api/products", tags=["products"], dependencies=[Depends(require_session)]
@@ -85,6 +86,49 @@ def list_products(
 @router.get("/filter-options")
 def filter_options():
     return db.get_filter_options()
+
+
+@router.get("/{product_id}/webami-suggestions")
+def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depends(get_creds)):
+    p = db.get_product_detail(product_id)
+    if not p:
+        raise HTTPException(404, "Product not found")
+    cands = db.suggest_local(p)
+    if search or not any(c["tier"] == 1 for c in cands):
+        stype = p.get("type") or p.get("product_type") or ""
+        fmt = {"Vinyl": "LP", "CD": "CD", "Cassette": "Cassette"}.get(stype, "")
+        try:
+            client = WebamiClient(config.WEBAMI_BASE_URL,
+                                  creds.get("webami_username"), creds.get("webami_password"))
+            seen = {c["upc"] for c in cands}
+            found = []
+            for r in client.search_site(p["title"], p["vendor"] or "", fmt)[:5]:
+                if r["upc"] in seen or not db.format_ok(stype, r["format"]):
+                    continue
+                try:
+                    page = client.get_product(f"/{r['upc']}")
+                except Exception:
+                    continue
+                if not page.get("title"):
+                    continue
+                if not db.good_match(p["title"], p["vendor"],
+                        page["title"], page.get("artist") or r["artist"]):
+                    continue
+                found.append({"id": None, "title": page["title"],
+                              "artist": page.get("artist") or r["artist"],
+                              "features": page.get("features"),
+                              "product_type": page.get("product_type") or r["format"],
+                              "upc": r["upc"], "price": page.get("price"),
+                              "tier": 2, "source": "search (page verified)",
+                              "artist_match": (page.get("artist") or r["artist"]).lower()
+                                              == (p["vendor"] or "").lower()})
+            cands += found
+        except Exception as e:
+            raise HTTPException(502, str(e))
+    cands.sort(key=lambda c: c["tier"])
+    for c in cands:
+        c["suggested_title"] = db.suggest_title(p["title"], c["title"], c.get("features"))
+    return {"items": cands[:15]}
 
 
 @router.get("/{product_id}")

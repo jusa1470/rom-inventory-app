@@ -68,12 +68,12 @@ def get_sync_log(limit: int = Query(15, ge=1, le=200)):
 
 
 @router.post("/webami-products")
-def start_webami_resolve(creds: dict = Depends(get_creds)):
+def start_webami_resolve(refetch: bool = False, creds: dict = Depends(get_creds)):
     user, pw = creds.get("webami_username"), creds.get("webami_password")
     if not user or not pw:
         raise HTTPException(400, "WebAMI credentials not configured")
     if any(j["name"] in ("WebAMI Sync", "WebAMI Products") for j in jobs.get_running()):
         raise HTTPException(409, "A WebAMI job is already running")
     job_id = jobs.start("WebAMI Products", jobs.run_webami_resolve,
-                        config.WEBAMI_BASE_URL, user, pw)
+                        config.WEBAMI_BASE_URL, user, pw, refetch)
     return {"job_id": job_id}

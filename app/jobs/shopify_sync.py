@@ -27,6 +27,7 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
     )
     # Recorded before the pull so products edited mid-sync are picked up next time.
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    started_db = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     synced = 0
     errors = 0
 
@@ -77,6 +78,9 @@ def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
     # products are retried next time.
     if status == "done":
         db.upsert_config(last_shopify_sync=started)
+        if full:
+            removed = db.delete_products_not_synced_since(started_db)
+            logger.info("Removed %d products deleted in Shopify", removed)
 
     logger.debug("Shopify sync %s: %d products in %.1fs", status, synced, time.monotonic() - t0)
     db.log_sync("shopify_sync", status, f"synced:{synced} errors:{errors}")

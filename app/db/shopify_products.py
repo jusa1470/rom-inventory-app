@@ -286,3 +286,9 @@ def update_local(product_id: str, product: dict, variants: list[dict]) -> None:
                     f"UPDATE shopify_variants SET {sets} WHERE variant_id=?",
                     [*cols.values(), v["id"]],
                 )
+
+
+def delete_products_not_synced_since(ts: str) -> int:
+    with transaction() as conn:
+        return conn.execute(
+            "DELETE FROM shopify_products WHERE last_synced < ?", (ts,)).rowcount

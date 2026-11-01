@@ -86,7 +86,7 @@ def _resolve(client: WebamiClient, job_id: str) -> int:
 def _sync(job_id, base_url, username, password) -> dict:
     client = WebamiClient(base_url, username, password)
     update(job_id, message="Listing WebAMI orders…")
-    new = client.list_new_orders(db.get_known_order_guids())
+    new = client.list_new_orders(db.get_known_order_guids(), db.get_incomplete_order_guids())
     update(job_id, total=len(new), unit="orders", message=f"Fetching {len(new)} new orders…")
     synced = errors = 0
 
@@ -116,9 +116,12 @@ def _sync(job_id, base_url, username, password) -> dict:
     return {"status": status, "synced": synced, "errors": errors}
 
 
-def run_webami_resolve(job_id: str, base_url: str, username: str, password: str) -> dict:
+def run_webami_resolve(job_id: str, base_url: str, username: str, password: str, refetch: bool = False) -> dict:
     try:
         client = WebamiClient(base_url, username, password)
+        if refetch:
+            update(job_id, message="Clearing WebAMI products…")
+            db.reset_webami_products()
         errors = _resolve(client, job_id)
     except Exception as exc:
         db.log_sync("webami_resolve", "error", str(exc))

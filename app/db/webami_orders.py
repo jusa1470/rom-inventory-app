@@ -29,6 +29,10 @@ def save_order(order: dict, items: list[dict]) -> None:
             "WHERE order_guid=? AND product_id IS NULL",
             (order["guid"],),
         )
+        conn.execute(
+            "UPDATE webami_products SET stale=1 WHERE id IN ("
+            "SELECT product_id FROM webami_order_items WHERE order_guid=? AND product_id IS NOT NULL)",
+            (order["guid"],))
 
 
 def list_webami_orders(search: str = "", page: int = 1, per_page: int = 50) -> dict:
@@ -71,3 +75,11 @@ def get_webami_stats() -> dict:
         "last_sync": one("SELECT MAX(created_at) FROM sync_log "
                          "WHERE action='webami_sync' AND status='done'"),
     }
+
+
+def get_incomplete_order_guids() -> set[str]:
+    """Orders whose stored item rows don't match the list page's #SKUs."""
+    return {r[0] for r in get_conn().execute(
+        "SELECT o.guid FROM webami_orders o "
+        "LEFT JOIN webami_order_items i ON i.order_guid = o.guid "
+        "GROUP BY o.guid HAVING COUNT(i.id) != o.sku_count")}

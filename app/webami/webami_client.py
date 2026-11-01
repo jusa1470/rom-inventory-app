@@ -9,7 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app import config
-from app.db.webami_products import norm
+from app.webami.webami_helper import norm
 from app.webami.limiter import AdaptiveLimiter
 
 logger = logging.getLogger(__name__)
@@ -111,17 +111,19 @@ def parse_product(page: str) -> dict:
         if sp and sp.get_text(strip=True) == "Format:":
             fmt = li.get_text(" ", strip=True)[len("Format:"):].strip()
             break
-    price = (ld.get("offers") or {}).get("price") or _txt(soup.select_one(".aec-listing-price"))
-    new = soup.select_one(".aec-new-price strong")
+    
+    music = (fmt or "").strip().lower() in ("lp", "cd", "cassette")
+    artist = _val(page, "artist") if music else None
     return {
         "title": _txt(soup.select_one("h2.title-h2")) or _val(page, "album"),
-        "artist": _val(page, "artist"),
-        "vendor": _info(soup, "Label") or ld.get("brand"),
+        "artist": artist,
+        "vendor": artist if music else ld.get("brand"),
+        "features": _txt(soup.select_one(".aec-main-desc")) or None,
         "product_type": fmt,
         "upc": _info(soup, "UPC") or _val(page, "upc_cd"),
         "sku": _info(soup, "Product ID"),
-        "price": _money(str(price)) if price else None,
-        "your_price": _money(_txt(new)) if new else None,
+        "price": None,
+        "your_price": None,
         "wmsid": _val(page, "wmsid"),
     }
 
@@ -197,14 +199,14 @@ class WebamiClient:
             return r.text
         raise RuntimeError("WebAMI: throttled or session rejected")
 
-    def list_new_orders(self, known: set[str]) -> list[dict]:
+    def list_new_orders(self, known: set[str], redo: set[str] = frozenset()) -> list[dict]:
         """Newest-first pages; stops once a page has nothing new."""
         size, page, out = config.WEBAMI_PAGE_SIZE, 1, []
         while True:
             rows = parse_order_list(self._get(
                 "/webami/submittedorders", {"Grid-page": page, "Grid-pageSize": size}))
-            out += [r for r in rows if r["guid"] not in known]
-            if len(rows) < size or all(r["guid"] in known for r in rows):
+            out += [r for r in rows if r["guid"] not in known or r["guid"] in redo]
+            if len(rows) < size:
                 return out
             page += 1
 
@@ -215,6 +217,27 @@ class WebamiClient:
         html_ = self._get(href)
         data = parse_product(html_)
         return data
+    
+    def get_cost(self, upc: str) -> float | None:
+        with self.limiter:
+            r = self._session().post(
+                f"{self.base}/ajax/priceavail",
+                data={"ids": upc},
+                headers={
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Origin": self.base,
+                }, timeout=30)
+        if r.status_code in (429, 503):
+            self.limiter.throttled(float(r.headers.get("Retry-After", 0) or 0))
+            return None
+        r.raise_for_status()
+        self.limiter.success()
+        data = r.json()
+        if data and data[0].get("Price"):
+            return _money(str(data[0]["Price"]))
+        return None
     
     def search_upc(self, upc: str) -> list[dict]:
         return parse_search(self._get(

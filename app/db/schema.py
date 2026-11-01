@@ -101,6 +101,7 @@ MIGRATIONS: list[str] = [
         title        TEXT,
         artist       TEXT,
         vendor       TEXT,
+        features     TEXT,
         product_type TEXT,
         sku          TEXT,
         upc          TEXT,
@@ -108,6 +109,7 @@ MIGRATIONS: list[str] = [
         your_price   REAL,
         wmsid        TEXT,
         href         TEXT,
+        stale        INTEGER DEFAULT 0,
         created_at   TEXT DEFAULT (datetime('now')),
         last_synced  TEXT DEFAULT (datetime('now'))
     );
@@ -119,6 +121,10 @@ MIGRATIONS: list[str] = [
         first_seen TEXT DEFAULT (datetime('now')),
         last_seen  TEXT DEFAULT (datetime('now')),
         UNIQUE(kind, value)
+    );
+    CREATE TABLE upc_ignored (
+        product_id TEXT PRIMARY KEY,
+        created_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);

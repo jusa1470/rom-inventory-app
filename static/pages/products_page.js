@@ -4,6 +4,8 @@ import { createMultiSelect } from '../components/multiselect.js';
 import { Toast } from '../components/toast.js';
 import { Fmt, buildPager, debounce, esc, statusBadge, thumb, truncCell } from '../util.js';
 
+const UPC_LEVEL = 'product'; // switch to 'variant' once UPCs move to variants
+
 // key = filter name (and filter-options key); sort = backend sort key
 const COLUMNS = [
   { label: '', width: 58 },
@@ -286,6 +288,7 @@ export class ProductsPage {
       width: '96vw',
       buttons: [
         { label: 'Edit', cls: 'btn-primary', onClick: () => this._openEdit(p) },
+        { label: 'Match WebAMI', onClick: () => this._openMatch(p) },
         { label: 'Close', onClick: Modal.close },
       ],
     });
@@ -381,6 +384,80 @@ export class ProductsPage {
       width: '96vw',
       buttons: [
         { label: 'Save', cls: 'btn-primary', onClick: save },
+        { label: 'Cancel', onClick: Modal.close },
+      ],
+    });
+  }
+
+  async _openMatch(p, search = false) {
+    let items;
+    try {
+      ({ items } = await API.get(
+        `/api/products/${encodeURIComponent(p.product_id)}/webami-suggestions?search=${search}`));
+    } catch (e) {
+      Toast.error(e.message);
+      return;
+    }
+    const body = document.createElement('div');
+    body.innerHTML = `
+      <div class="muted">Current UPC: ${esc(p.upc || '—')} · Vendor: ${esc(p.vendor || '—')}</div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table class="variants-table">
+          <thead><tr><th></th><th>Source</th><th>Title</th><th>Artist</th><th>Format</th>
+            <th>UPC</th><th class="num">Price</th></tr></thead>
+          <tbody>
+            ${items.length ? items.map((c, i) => `
+              <tr>
+                <td><input type="radio" name="cand" value="${i}" ${i === 0 ? 'checked' : ''}></td>
+                <td>${esc(c.source)}${c.artist_match ? '' : ' (artist differs)'}</td>
+                <td>${truncCell(c.title)}</td>
+                <td>${truncCell(c.artist)}</td>
+                <td>${esc(c.product_type || '—')}</td>
+                <td class="mono">${esc(c.upc)}</td>
+                <td class="num">${c.price != null ? Fmt.price(c.price) : '—'}</td>
+              </tr>`).join('')
+              : '<tr><td colspan="7" class="empty-cell">No matches</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div class="input-group" style="margin-top:12px">
+        <label class="check-row" style="margin-top:0">
+          <input type="checkbox" name="upd_title"><span>Update title</span></label>
+        <input class="input" name="title" value="${esc(items[0]?.suggested_title || p.title)}">
+      </div>`;
+    const titleInput = body.querySelector('[name=title]');
+    body.querySelectorAll('[name=cand]').forEach(r =>
+      r.addEventListener('change', () => { titleInput.value = items[+r.value].suggested_title; }));
+
+    const save = async () => {
+      const sel = body.querySelector('[name=cand]:checked');
+      if (!sel) return;
+      const c = items[+sel.value];
+      const product = {};
+      const variants = [];
+      if (UPC_LEVEL === 'product') product.upc = c.upc;
+      else variants.push({ id: p.variants[0].variant_id, upc: c.upc });
+      const title = titleInput.value.trim();
+      if (body.querySelector('[name=upd_title]').checked && title && title !== p.title) {
+        product.title = title;
+      }
+      try {
+        const res = await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
+        Modal.close();
+        res.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('UPC saved to Shopify');
+        this._load();
+      } catch (e) {
+        Toast.error(e.message);
+      }
+    };
+
+    Modal.open({
+      title: `Match WebAMI: ${p.title}`,
+      body,
+      width: '96vw',
+      buttons: [
+        { label: 'Confirm match', cls: 'btn-primary', onClick: save },
+        { label: 'Search WebAMI', onClick: () => this._openMatch(p, true) },
         { label: 'Cancel', onClick: Modal.close },
       ],
     });

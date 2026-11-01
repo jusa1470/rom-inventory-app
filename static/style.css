@@ -280,3 +280,18 @@ textarea.scope-box { height: 96px; padding: 8px 12px; resize: vertical; font-fam
 .scope-add { display: flex; gap: 8px; margin-top: 8px; }
 .scope-add .input { max-width: 340px; }
 select.input { cursor: pointer; }
+
+.cmp td { vertical-align: top; white-space: normal; }
+.cmp .pair { display: flex; flex-direction: column; gap: 2px; }
+.cmp .pair .sub { color: var(--text-muted); font-size: 12px; }
+.cmp .side { padding: 0 0 0 10px; border-left: 2px solid var(--blue); }
+.cmp col.c-title { width: 26%; } .cmp col.c-vendor { width: 16%; }
+.cmp col.c-type { width: 9%; } .cmp col.c-price { width: 10%; }
+.cmp col.c-upc { width: 11%; } .cmp col.c-act { width: 14%; }
+
+.spinner {
+  display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+  border: 2px solid var(--border-light); border-top-color: var(--blue);
+  border-radius: 50%; vertical-align: -2px; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
