@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import logging
 from pathlib import Path
@@ -15,6 +15,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logging.getLogger("watchfiles").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -33,6 +34,12 @@ app.include_router(shopify_oauth_api.router)
 app.include_router(shopify_oauth_api.callback_router)
 app.include_router(sync_api.router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.exception_handler(Exception)
+async def unhandled(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
 @app.get("/{path:path}")

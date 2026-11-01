@@ -31,7 +31,7 @@ def _resolve(client: WebamiClient, job_id: str) -> int:
             return None
 
     def _page(href):
-        p = _try(lambda: client.get_product(href)) if href else None
+        p = _try(lambda: client.fetch_product(href)) if href else None
         return p if p and p.get("title") else None
 
     def fetch(i):

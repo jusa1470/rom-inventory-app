@@ -27,8 +27,8 @@ def get_order(guid: str):
 
 
 @router.get("/products/{product_id}")
-def get_product(product_id: int):
-    p = db.get_webami_product(product_id)
+def get_webami_product_route(product_id: int):
+    p = db.get_webami_product_by_id(product_id)
     if not p:
         raise HTTPException(404, "Product not found")
     return p

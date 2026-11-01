@@ -93,6 +93,9 @@ def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depe
     p = db.get_product_detail(product_id)
     if not p:
         raise HTTPException(404, "Product not found")
+    tags = [t.strip().lower() for t in (p.get("tags") or "").split(",")]
+    if p["title"].strip().endswith("- U") or "used" in tags:
+        return {"items": []}
     cands = db.suggest_local(p)
     if search or not any(c["tier"] == 1 for c in cands):
         stype = p.get("type") or p.get("product_type") or ""
@@ -117,6 +120,7 @@ def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depe
                 found.append({"id": None, "title": page["title"],
                               "artist": page.get("artist") or r["artist"],
                               "features": page.get("features"),
+                              "description": page.get("description"),
                               "product_type": page.get("product_type") or r["format"],
                               "upc": r["upc"], "price": page.get("price"),
                               "tier": 2, "source": "search (page verified)",
@@ -127,12 +131,12 @@ def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depe
             raise HTTPException(502, str(e))
     cands.sort(key=lambda c: c["tier"])
     for c in cands:
-        c["suggested_title"] = db.suggest_title(p["title"], c["title"], c.get("features"))
+        c["suggested_title"] = db.suggest_title(p["title"], c["title"], c.get("features"), c.get("description"))
     return {"items": cands[:15]}
 
 
 @router.get("/{product_id}")
-def get_product_detail(product_id: str):
+def get_shopify_product_route(product_id: str):
     product = db.get_product_detail(product_id)
     if not product:
         raise HTTPException(404, "Product not found")
@@ -162,4 +166,6 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.update_local(product_id, p, vs)
+    if p.get("upc") or any(v.get("upc") for v in vs):
+        db.drop_from_match_cache(product_id)
     return {"ok": True}

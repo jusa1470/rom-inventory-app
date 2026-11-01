@@ -4,7 +4,6 @@ import re
 
 from app import config
 from app.db.connection import get_conn, rows, transaction
-from app.webami.webami_client import parse_product
 from app.webami.webami_helper import _COLS, _FEAT, norm
 
 
@@ -87,17 +86,6 @@ def save_webami_product(data: dict, extra_ids=(), update: bool = True, use_finge
     return pid
 
 
-def get_webami_product(self, href: str) -> dict:
-    html_ = self._get(href)
-    data = parse_product(html_)
-    if data.get("upc"):
-        try:
-            data["price"] = data["your_price"] = self.get_cost(data["upc"])
-        except Exception:
-            logger.error("priceavail failed for %s", data["upc"], exc_info=True)
-    return data
-
-
 def _simplify(t: str) -> str:
     return re.sub(r"[\[\(].*?[\]\)]", " ", t or "").strip()
 
@@ -115,7 +103,7 @@ def format_ok(shopify_type: str | None, wfmt: str | None) -> bool:
     return True
 
 
-def suggest_title(shopify_title: str, webami_title: str, features: str | None = None) -> str:
+def suggest_title(shopify_title: str, webami_title: str, features: str | None = None, description: str | None = None) -> str:
     """Shopify title plus one (feature, feature) group from the WebAMI title."""
     w = webami_title or ""
     have = norm(shopify_title)
@@ -143,6 +131,8 @@ def suggest_title(shopify_title: str, webami_title: str, features: str | None = 
             continue
         for f in (_FEAT.findall(chunk) or [chunk]):
             add(f)
+    for f in _FEAT.findall(description or ""):
+        add(f)
     return f"{shopify_title} ({', '.join(feats)})" if feats else shopify_title
 
 
@@ -151,7 +141,7 @@ def _index() -> dict:
     idx: dict[str, list[dict]] = {}
     for w in rows(get_conn().execute(
             "SELECT id, title, artist, vendor, product_type, upc, sku, price, your_price, "
-            "href, wmsid, features FROM webami_products "
+            "href, wmsid, features, description FROM webami_products "
             "WHERE upc IS NOT NULL AND upc != ''").fetchall()):
         w["_ta"] = norm(_simplify(w["title"]))
         w["_aa"] = norm(w["artist"])
@@ -191,7 +181,9 @@ def list_unmatched(page: int = 1, per_page: int = 25, q: str = "", only_suggeste
     where = ("(p.upc IS NULL OR p.upc='') AND NOT EXISTS (SELECT 1 FROM shopify_variants v "
              "WHERE v.product_id=p.product_id AND v.upc IS NOT NULL AND v.upc != '') "
              "AND p.product_id NOT IN (SELECT product_id FROM upc_ignored) "
-             "AND COALESCE(p.type, p.product_type) IN ('Vinyl','CD','Cassette')")
+             "AND COALESCE(p.type, p.product_type) IN ('Vinyl','CD','Cassette') "
+             "AND TRIM(p.title) NOT LIKE '%- U' AND TRIM(p.title) != '- U' "
+             "AND (',' || LOWER(REPLACE(COALESCE(p.tags,''), ' ', '')) || ',') NOT LIKE '%used%'")
     params: list = []
     if q:
         where += " AND (p.title LIKE ? OR p.vendor LIKE ?)"
@@ -209,7 +201,7 @@ def list_unmatched(page: int = 1, per_page: int = 25, q: str = "", only_suggeste
         c = suggest_local(p, idx)
         c.sort(key=lambda w: (w["tier"], -sim(p["title"], w["title"]) - sim(p["vendor"], w["artist"])))
         for w in c:
-            w["suggested_title"] = suggest_title(p["title"], w["title"], w.get("features"))
+            w["suggested_title"] = suggest_title(p["title"], w["title"], w.get("features"), w.get("description"))
         p["suggestions"] = c[:5]
         return p
 
@@ -232,6 +224,7 @@ def list_unmatched(page: int = 1, per_page: int = 25, q: str = "", only_suggeste
 def ignore_product(product_id: str) -> None:
     with transaction() as conn:
         conn.execute("INSERT OR IGNORE INTO upc_ignored (product_id) VALUES (?)", (product_id,))
+    drop_from_match_cache(product_id)
 
 
 def reset_webami_products() -> None:
@@ -239,3 +232,20 @@ def reset_webami_products() -> None:
         conn.execute("UPDATE webami_order_items SET product_id = NULL")
         conn.execute("DELETE FROM webami_product_ids")
         conn.execute("DELETE FROM webami_products")
+
+
+def get_webami_product_by_id(product_id: int):
+    conn = get_conn()
+    p = conn.execute("SELECT * FROM webami_products WHERE id=?", (product_id,)).fetchone()
+    if not p:
+        return None
+    p = dict(p)
+    p["ids"] = rows(conn.execute(
+        "SELECT kind, value, first_seen, last_seen FROM webami_product_ids "
+        "WHERE product_id=? ORDER BY kind, first_seen", (product_id,)).fetchall())
+    return p
+
+
+def drop_from_match_cache(product_id: str) -> None:
+    if _cache["data"]:
+        _cache["data"] = [p for p in _cache["data"] if p["product_id"] != product_id]

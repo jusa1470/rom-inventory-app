@@ -52,9 +52,10 @@ def start(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
                 update(job_id, result=result)
             else:
                 update(job_id, status="done", result=result)
-        except Exception as exc:
+        except BaseException as exc:
             logger.exception("Job %s (%s) failed", job_id, name)
-            update(job_id, status="error", error=str(exc), message=f"Error: {exc}")
+            update(job_id, status="error", cancelled=True,
+                   error=f"{type(exc).__name__}: {exc}", message=f"Error: {exc}")
 
     threading.Thread(target=_run, daemon=True).start()
     return job_id
@@ -79,3 +80,17 @@ def is_cancelled(job_id: str) -> bool:
 def get_running() -> list[dict[str, Any]]:
     with _lock:
         return [dict(j) for j in _jobs.values() if j["status"] == "running"]
+
+
+def _thread_hook(args) -> None:
+    """Uncaught exception in any thread: fail every running job so the UI shows it."""
+    logger.error("Uncaught thread exception", exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+    with _lock:
+        for job in _jobs.values():
+            if job["status"] == "running":
+                job.update(status="error", cancelled=True,
+                           error=f"{args.exc_type.__name__}: {args.exc_value}",
+                           message=f"Error: {args.exc_value}")
+
+
+threading.excepthook = _thread_hook

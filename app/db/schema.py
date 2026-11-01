@@ -109,6 +109,7 @@ MIGRATIONS: list[str] = [
         your_price   REAL,
         wmsid        TEXT,
         href         TEXT,
+        description  TEXT,
         stale        INTEGER DEFAULT 0,
         created_at   TEXT DEFAULT (datetime('now')),
         last_synced  TEXT DEFAULT (datetime('now'))

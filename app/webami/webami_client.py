@@ -94,6 +94,11 @@ def _val(page, id_):
     return html.unescape(m.group(1)) if m else None
 
 
+def _description(page: str):
+    m = re.search(r'class="aec-desc-review[^"]*"[^>]*>(.*?)</div>', page, re.S)
+    return _txt(BeautifulSoup(m.group(1), "lxml")) if m else None
+
+
 def parse_product(page: str) -> dict:
     head = page.find('class="main-title')
     end = page.find('id="aec-product-description"')
@@ -125,11 +130,13 @@ def parse_product(page: str) -> dict:
         "price": None,
         "your_price": None,
         "wmsid": _val(page, "wmsid"),
+        "description": _description(page),
     }
 
 
 def simplify(t: str) -> str:
-    return re.sub(r"[\[\(].*?[\]\)]", " ", t or "").strip()
+    t = re.sub(r"[\[\(].*?[\]\)]", " ", t or "")
+    return re.split(r"\s+-\s+", t, maxsplit=1)[0].strip()
 
 
 def parse_search(page: str) -> list[dict]:
@@ -213,12 +220,16 @@ class WebamiClient:
     def get_order_items(self, guid: str) -> list[dict]:
         return parse_order_items(self._get(f"/webami/vieworder/{guid}"))
 
-    def get_product(self, href: str) -> dict:
-        html_ = self._get(href)
-        data = parse_product(html_)
+    def fetch_product(self, href: str) -> dict:
+        data = parse_product(self._get(href))
+        if data.get("upc"):
+            try:
+                data["price"] = data["your_price"] = self.fetch_price(data["upc"])
+            except Exception:
+                logger.warning("priceavail failed for %s", data["upc"], exc_info=True)
         return data
     
-    def get_cost(self, upc: str) -> float | None:
+    def fetch_price(self, upc: str) -> float | None:
         with self.limiter:
             r = self._session().post(
                 f"{self.base}/ajax/priceavail",

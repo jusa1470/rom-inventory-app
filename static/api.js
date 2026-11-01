@@ -37,3 +37,15 @@ export const API = {
   put: (path, body) => request('PUT', path, body),
   delete: path => request('DELETE', path),
 };
+
+function report(msg) {
+  import('./components/toast.js').then(({ Toast }) => Toast.error(msg));
+}
+
+window.addEventListener('unhandledrejection', e => {
+  const err = e.reason;
+  if (err && err.status) return; // API errors are toasted by their callers
+  report(`Unexpected error: ${(err && err.message) || err}`);
+});
+
+window.addEventListener('error', e => report(`Unexpected error: ${e.message}`));

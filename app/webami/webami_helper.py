@@ -2,7 +2,7 @@ import re
 
 
 _COLS = ("title", "artist", "vendor", "features", "product_type", "sku", "upc",
-         "price", "your_price", "wmsid", "href")
+         "price", "your_price", "wmsid", "href", "description")
 
 _EDITIONS = [
     "Indie Exclusive", "RSD Exclusive", "RSD Black Friday 2025", "RSD 2026", "RSD Essential",
