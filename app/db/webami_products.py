@@ -4,14 +4,18 @@ import re
 
 from app import config
 from app.db.connection import get_conn, rows, transaction
-from app.webami.webami_helper import _COLS, _FEAT, norm
+from app.webami.webami_helper import _ATTRS, _COLOR_RE, _COLS, _FEAT, norm
 
 
 logger: logging.Logger = logging.getLogger(__name__)
 _cache: dict = {"key": None, "data": None}
 
 MATCH_MIN = 0.70
-
+_IGNORE_KW = {"black", "vinyl", "lp", "standard", "none", "explicit"}
+_COLOR_ONLY = re.compile(
+    rf"^(?:{_COLOR_RE}|\d{{3}}\s?g(?:ram)?(?:\s+{_COLOR_RE})?|picture\s+disc|zoetrope)$", re.I)
+_ATTR_SET = {norm(a) for a in _ATTRS}
+_SKIP_FEAT = {"vinyl", "lp"}
 
 def sim(a, b) -> float:
     a, b = norm(a), norm(b)
@@ -87,7 +91,8 @@ def save_webami_product(data: dict, extra_ids=(), update: bool = True, use_finge
 
 
 def _simplify(t: str) -> str:
-    return re.sub(r"[\[\(].*?[\]\)]", " ", t or "").strip()
+    t = re.sub(r"[\[\(].*?[\]\)]", " ", t or "")
+    return re.split(r"\s+-\s+", t, maxsplit=1)[0].strip()
 
 
 def format_ok(shopify_type: str | None, wfmt: str | None) -> bool:
@@ -150,6 +155,72 @@ def _index() -> dict:
     return idx
 
 
+def _kn(f: str) -> str:
+    return re.sub(r"\s+vinyl$", "", norm(f))
+
+
+def kws(text) -> set[str]:
+    return {k for k in (_kn(f) for f in _FEAT.findall(text or "")) if k and k not in _IGNORE_KW}
+
+
+def variant_kws(vtitle) -> set[str]:
+    out: set[str] = set()
+    for part in re.split(r"\s*\|\s*|\s+/\s+", vtitle or ""):
+        found = _FEAT.findall(part)
+        out |= {_kn(f) for f in found} if found else {_kn(part)}
+    return out - _IGNORE_KW - {""}
+
+
+def kw_eval(p: dict, w: dict) -> tuple[list[str], list[str]]:
+    """(missing, extra): variant keywords absent from WebAMI, WebAMI title/features keywords not in variant."""
+    if p.get("variant_title") is None:
+        return [], []
+    need = variant_kws(p["variant_title"])
+    strict = kws(w.get("title")) | kws(w.get("features"))
+    have = strict | kws(w.get("description"))
+    return sorted(need - have), sorted(strict - need)
+
+
+def feature_list(w: dict) -> list[str]:
+    """Features from title (bracketed, after ' - ', inline), features field, description."""
+    t = w.get("title") or ""
+    stripped = re.sub(r"[\[\(][^\]\)]*[\]\)]", " ", t)
+    tail = re.split(r"\s+-\s+", stripped, maxsplit=1)
+    out: list[str] = []
+    for c in [*re.findall(r"[\[\(]([^\]\)]+)[\]\)]", t), *tail[1:]]:
+        out += _FEAT.findall(c) or [c]
+    out += _FEAT.findall(tail[0])
+    for c in re.split(r"[;,]", re.sub(r"^[\[\(]|[\]\)]$", "", (w.get("features") or "").strip())):
+        if not re.search(r"explicit|parental", c, re.I):
+            out += _FEAT.findall(c) or [c]
+    out += _FEAT.findall(w.get("description") or "")
+    return out
+
+
+def suggest_parts(w: dict) -> dict:
+    """Suggested product title, edition, color, attributes from a WebAMI product."""
+    ed: list[str] = []
+    col: list[str] = []
+    at: list[str] = []
+    seen: set[str] = set()
+    for f in feature_list(w):
+        f = re.sub(r"\s+", " ", f).strip(" -–,/")
+        n = norm(f)
+        if not n or n in seen or n in _SKIP_FEAT or "explicit" in n:
+            continue
+        seen.add(n)
+        if _COLOR_ONLY.match(f):
+            col.append(f if re.search(r"vinyl|disc|zoetrope", f, re.I) else f"{f} Vinyl")
+        elif n in _ATTR_SET:
+            at.append(f)
+        else:
+            ed.append(f)
+    return {"title": _simplify(w.get("title")),
+            "edition": " - ".join(ed) or "Standard",
+            "color": col[0] if col else "None",
+            "attributes": ", ".join(at) or "None"}
+
+
 def suggest_local(p: dict, idx: dict | None = None) -> list[dict]:
     idx = _index() if idx is None else idx
     stype = p.get("type") or p.get("product_type")
@@ -161,7 +232,11 @@ def suggest_local(p: dict, idx: dict | None = None) -> list[dict]:
             seen.add(w["id"])
             if format_ok(stype, w["product_type"]) and good_match(
                     p["title"], p["vendor"], w["title"], w["artist"]):
+                missing, extra = kw_eval(p, w)
+                if missing:
+                    continue
                 out.append({**{k: v for k, v in w.items() if not k.startswith("_")},
+                            "kw_extra": extra,
                             "tier": 1 if w["wmsid"] else 3,
                             "source": "orders" if w["wmsid"] else "order line only",
                             "artist_match": True})
@@ -174,6 +249,49 @@ def _cache_key(q: str) -> tuple:
             c.execute("SELECT COUNT(*), MAX(last_synced) FROM webami_products").fetchone()[:],
             c.execute("SELECT COUNT(*), MAX(last_synced) FROM shopify_products").fetchone()[:],
             c.execute("SELECT COUNT(*) FROM upc_ignored").fetchone()[0])
+
+
+def list_unmatched_variants(page: int = 1, per_page: int = 25, q: str = "",
+                            only_suggested: bool = False) -> dict:
+    conn = get_conn()
+    where = ("(v.upc IS NULL OR v.upc='') "
+             "AND COALESCE(p.type, p.product_type) IN ('Vinyl','CD','Cassette') "
+             "AND v.variant_id NOT IN (SELECT product_id FROM upc_ignored) "
+             "AND TRIM(p.title) NOT LIKE '% - U' "
+             "AND (',' || LOWER(REPLACE(COALESCE(p.tags,''), ' ', '')) || ',') NOT LIKE '%,used,%'")
+    params: list = []
+    if q:
+        where += " AND (p.title LIKE ? OR p.vendor LIKE ? OR v.title LIKE ?)"
+        params = [f"%{q}%"] * 3
+    sel = ("SELECT p.product_id, p.title, p.vendor, p.type, p.product_type, "
+           "v.variant_id, v.title AS variant_title, v.cost "
+           "FROM shopify_variants v JOIN shopify_products p ON p.product_id=v.product_id "
+           f"WHERE {where} ORDER BY p.vendor COLLATE NOCASE, p.title COLLATE NOCASE, v.rowid")
+    idx = _index()
+
+    def enrich(p):
+        c = suggest_local(p, idx)
+        c.sort(key=lambda w: (w["tier"], len(w["kw_extra"]),
+                              -sim(p["title"], w["title"]) - sim(p["vendor"], w["artist"])))
+        for w in c:
+            w["suggested"] = suggest_parts(w)
+        p["suggestions"] = c[:5]
+        return p
+
+    if only_suggested:
+        key = _cache_key(q)
+        if _cache["key"] != key:
+            _cache["data"] = [p for p in map(enrich, rows(conn.execute(sel, params).fetchall()))
+                              if p["suggestions"]]
+            _cache["key"] = key
+        allp = _cache["data"]
+        return {"items": allp[(max(page, 1) - 1) * per_page:][:per_page], "total": len(allp)}
+    total = conn.execute(
+        "SELECT COUNT(*) FROM shopify_variants v JOIN shopify_products p "
+        f"ON p.product_id=v.product_id WHERE {where}", params).fetchone()[0]
+    items = rows(conn.execute(
+        f"{sel} LIMIT ? OFFSET ?", [*params, per_page, (max(page, 1) - 1) * per_page]).fetchall())
+    return {"items": [enrich(p) for p in items], "total": total}
 
 
 def list_unmatched(page: int = 1, per_page: int = 25, q: str = "", only_suggested: bool = False) -> dict:
@@ -246,6 +364,6 @@ def get_webami_product_by_id(product_id: int):
     return p
 
 
-def drop_from_match_cache(product_id: str) -> None:
+def drop_from_match_cache(variant_id: str) -> None:
     if _cache["data"]:
-        _cache["data"] = [p for p in _cache["data"] if p["product_id"] != product_id]
+        _cache["data"] = [p for p in _cache["data"] if p["variant_id"] != variant_id]

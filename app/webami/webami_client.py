@@ -254,7 +254,7 @@ class WebamiClient:
         return parse_search(self._get(
             "https://ac.aent-m.com/api/s24ac", {"q": upc, "mod": "AP", "tid": 1}))
 
-    def search_site(self, title: str, artist: str, fmt: str) -> list[dict]:
+    def search_site(self, title: str, artist: str, fmt: str, extra: str = "") -> list[dict]:
         return parse_search(self._get("/search", {
-            "mod": "AP", "q": f"{simplify(title)} {artist}".strip(),
+            "mod": "AP", "q": f"{simplify(title)} {artist} {extra}".strip(),
             "ft": FORMATS.get(fmt, fmt)}))

@@ -89,13 +89,15 @@ def filter_options():
 
 
 @router.get("/{product_id}/webami-suggestions")
-def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depends(get_creds)):
+def webami_suggestions(product_id: str, search: bool = False, variant_id: str | None = None, creds: dict = Depends(get_creds)):
     p = db.get_product_detail(product_id)
     if not p:
         raise HTTPException(404, "Product not found")
     tags = [t.strip().lower() for t in (p.get("tags") or "").split(",")]
     if p["title"].strip().endswith("- U") or "used" in tags:
         return {"items": []}
+    v = next((x for x in p["variants"] if x["variant_id"] == variant_id), None)
+    p["variant_title"] = v["title"] if v else None
     cands = db.suggest_local(p)
     if search or not any(c["tier"] == 1 for c in cands):
         stype = p.get("type") or p.get("product_type") or ""
@@ -105,7 +107,12 @@ def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depe
                                   creds.get("webami_username"), creds.get("webami_password"))
             seen = {c["upc"] for c in cands}
             found = []
-            for r in client.search_site(p["title"], p["vendor"] or "", fmt)[:5]:
+            kw = " ".join(sorted(db.variant_kws(p["variant_title"]))) if v else ""
+            results = client.search_site(p["title"], p["vendor"] or "", fmt, kw) if kw else []
+            got = {x["upc"] for x in results}
+            results += [x for x in client.search_site(p["title"], p["vendor"] or "", fmt)
+                        if x["upc"] not in got]
+            for r in results[:8]:
                 if r["upc"] in seen or not db.format_ok(stype, r["format"]):
                     continue
                 try:
@@ -117,6 +124,10 @@ def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depe
                 if not db.good_match(p["title"], p["vendor"],
                         page["title"], page.get("artist") or r["artist"]):
                     continue
+                missing, extra = db.kw_eval(p, {"title": page["title"], "features": page.get("features"),
+                                                "description": page.get("description")})
+                if missing:
+                    continue
                 found.append({"id": None, "title": page["title"],
                               "artist": page.get("artist") or r["artist"],
                               "features": page.get("features"),
@@ -124,6 +135,7 @@ def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depe
                               "product_type": page.get("product_type") or r["format"],
                               "upc": r["upc"], "price": page.get("price"),
                               "tier": 2, "source": "search (page verified)",
+                              "kw_extra": extra,
                               "artist_match": (page.get("artist") or r["artist"]).lower()
                                               == (p["vendor"] or "").lower()})
             cands += found
@@ -131,7 +143,7 @@ def webami_suggestions(product_id: str, search: bool = False, creds: dict = Depe
             raise HTTPException(502, str(e))
     cands.sort(key=lambda c: c["tier"])
     for c in cands:
-        c["suggested_title"] = db.suggest_title(p["title"], c["title"], c.get("features"), c.get("description"))
+        c["suggested"] = db.suggest_parts(c)
     return {"items": cands[:15]}
 
 
@@ -166,6 +178,7 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.update_local(product_id, p, vs)
-    if p.get("upc") or any(v.get("upc") for v in vs):
-        db.drop_from_match_cache(product_id)
+    for v in vs:
+        if v.get("upc"):
+            db.drop_from_match_cache(v["id"])
     return {"ok": True}

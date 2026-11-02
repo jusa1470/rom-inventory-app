@@ -3,7 +3,7 @@ import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
 import { buildPager, debounce, esc, Fmt, truncCell } from '../util.js';
 
-const UPC_LEVEL = 'product'; // 'variant' once UPCs move to variants
+const UPC_LEVEL = 'variant';
 
 export class MatchesPage {
     constructor() { this.page = 1; this.q = ''; this.only = false; this._request = 0; }
@@ -57,8 +57,10 @@ export class MatchesPage {
                 const link = s && s.href ? `<a href="https://webami.aent.com${esc(s.href)}" target="_blank" rel="noopener">WebAMI ↗</a>` : '';
                 const dash = '<span class="muted">—</span>';
                 return `<tr>
-                    <td>${esc(p.title)}</td>
-                    <td>${s ? esc(s.title) : dash}</td>
+                    <td><div class="pair"><span>${esc(p.title)}</span>
+                        <span class="sub">${esc(p.variant_title || '')}</span></div></td>
+                    <td><div class="pair"><span>${s ? esc(s.title) : '—'}</span>
+                        <span class="sub">${s && s.kw_extra.length ? 'extra: ' + esc(s.kw_extra.join(', ')) : ''}</span></div></td>
                     <td><div class="pair"><span>${esc(p.vendor || '—')}</span>
                         <span class="sub side">${s ? esc(s.artist || '—') : '—'}</span></div></td>
                     <td><div class="pair"><span>${esc(p.type || p.product_type || '—')}</span>
@@ -87,56 +89,78 @@ export class MatchesPage {
         }
     }
 
-    async _save(p, upc, title) {
+    async _save(p, upc, title, vtitle) {
         const product = {}, variants = [];
-        if (UPC_LEVEL === 'product') product.upc = upc;
-        else variants.push({ id: p.variant_id, upc });
+        const v = { id: p.variant_id, upc };
+        if (vtitle && vtitle !== p.variant_title) v.title = vtitle;
+        variants.push(v);
         if (title && title !== p.title) product.title = title;
         try {
-            const res = await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
-            Modal.close();
-            res.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('Saved to Shopify');
-            this._load();
+          const res = await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
+          Modal.close();
+          res.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('Saved to Shopify');
+          this._load();
         } catch (e) { Toast.error(e.message); }
-    }
+      }
 
-    _match(p, cands = p.suggestions) {
+      _match(p, cands = p.suggestions) {
         const body = document.createElement('div');
         body.innerHTML = `
-            <div class="muted">Shopify: ${esc(p.title)} — ${esc(p.vendor || '')}</div>
-            <div class="table-wrap" style="margin-top:12px"><table class="variants-table">
-                <thead><tr><th></th><th>Source</th><th>Title</th><th>Artist</th><th>Format</th><th class="num">Price</th><th>UPC</th><th>Link</th></tr></thead>
-                <tbody>${cands.map((c, i) => `<tr>
-                <td><input type="radio" name="cand" value="${i}" ${i === 0 ? 'checked' : ''}></td>
-                <td>${esc(c.source)}${c.artist_match ? '' : ' (artist differs)'}</td>
-                <td>${truncCell(c.title)}</td><td>${truncCell(c.artist)}</td>
-                <td>${esc(c.product_type || '—')}</td><td class="num">${c.price != null ? Fmt.price(c.price) : '—'}</td><td class="mono">${esc(c.upc)}</td><td>${c.href ? `<a href="https://webami.aent.com${esc(c.href)}" target="_blank" rel="noopener">↗</a>` : ''}</td></tr>`).join('')}
-                </tbody></table></div>
-            <div class="input-group" style="margin-top:12px">
-                <label class="check-row" style="margin-top:0"><input type="checkbox" name="upd"><span>Update title</span></label>
-                <input class="input" name="title">
-            </div>`;
-        const t = body.querySelector('[name=title]'), chk = body.querySelector('[name=upd]');
+          <div class="muted">Shopify: ${esc(p.title)} — ${esc(p.vendor || '')} · ${esc(p.variant_title || '')}</div>
+          <div class="table-wrap" style="margin-top:12px"><table class="variants-table">
+            <thead><tr><th></th><th>Source</th><th>Title</th><th>Artist</th><th>Format</th><th class="num">Price</th><th>UPC</th><th>Link</th></tr></thead>
+            <tbody>${cands.map((c, i) => `<tr>
+              <td><input type="radio" name="cand" value="${i}" ${i === 0 ? 'checked' : ''}></td>
+              <td>${esc(c.source)}${c.artist_match ? '' : ' (artist differs)'}${c.kw_extra && c.kw_extra.length ? ' · extra: ' + esc(c.kw_extra.join(', ')) : ''}</td>
+              <td>${truncCell(c.title)}</td><td>${truncCell(c.artist)}</td>
+              <td>${esc(c.product_type || '—')}</td>
+              <td class="num">${c.price != null ? Fmt.price(c.price) : '—'}</td>
+              <td class="mono">${esc(c.upc)}</td>
+              <td>${c.href ? `<a href="https://webami.aent.com${esc(c.href)}" target="_blank" rel="noopener">↗</a>` : ''}</td></tr>`).join('')}
+            </tbody></table></div>
+          <div class="form-grid" style="margin-top:12px">
+            <div class="input-group"><label class="input-label">Product title</label>
+              <input class="input" name="title"></div>
+            <div class="input-group"><label class="input-label">Edition</label>
+              <input class="input" name="edition"></div>
+            <div class="input-group"><label class="input-label">Color</label>
+              <input class="input" name="color"></div>
+            <div class="input-group"><label class="input-label">Attributes</label>
+              <input class="input" name="attributes"></div>
+            <div class="input-group"><label class="input-label">Variant title</label>
+              <input class="input" name="vtitle" readonly></div>
+          </div>
+          <label class="check-row"><input type="checkbox" name="upd"><span>Update product and variant titles</span></label>`;
+        const f = n => body.querySelector(`[name=${n}]`);
+        const vt = () => [f('edition').value.trim() || 'Standard',
+          f('color').value.trim() || 'None', f('attributes').value.trim() || 'None'].join(' | ');
+        const sync = () => {
+          f('vtitle').value = vt();
+          f('upd').checked = f('title').value.trim() !== p.title || f('vtitle').value !== p.variant_title;
+        };
         const pick = () => {
-            const c = cands[+body.querySelector('[name=cand]:checked').value];
-            t.value = c.suggested_title;
-            chk.checked = c.suggested_title !== p.title;  // titles differ or features exist
+          const s = cands[+body.querySelector('[name=cand]:checked').value].suggested;
+          f('title').value = s.title;
+          f('edition').value = s.edition;
+          f('color').value = s.color;
+          f('attributes').value = s.attributes;
+          sync();
         };
         body.querySelectorAll('[name=cand]').forEach(r => r.addEventListener('change', pick));
+        ['title', 'edition', 'color', 'attributes'].forEach(n => f(n).addEventListener('input', sync));
         pick();
         Modal.open({
-            title: 'Confirm match', body, width: '96vw',
-            buttons: [
-                {
-                    label: 'Confirm', cls: 'btn-primary', onClick: () => {
-                        const c = cands[+body.querySelector('[name=cand]:checked').value];
-                        this._save(p, c.upc, chk.checked ? t.value.trim() : null);
-                    }
-                },
-                { label: 'Cancel', onClick: Modal.close },
-            ],
+          title: 'Confirm match', body, width: '96vw',
+          buttons: [
+            { label: 'Confirm', cls: 'btn-primary', onClick: () => {
+              const c = cands[+body.querySelector('[name=cand]:checked').value];
+              const upd = f('upd').checked;
+              this._save(p, c.upc, upd ? f('title').value.trim() : null, upd ? f('vtitle').value : null);
+            } },
+            { label: 'Cancel', onClick: Modal.close },
+          ],
         });
-    }
+      }
 
     _noMatch(p) {
         const body = document.createElement('div');
@@ -162,14 +186,14 @@ export class MatchesPage {
                     label: 'Search WebAMI', onClick: async () => {
                         try {
                             const { items } = await API.get(
-                                `/api/products/${encodeURIComponent(p.product_id)}/webami-suggestions?search=true`);
+                                `/api/products/${encodeURIComponent(p.product_id)}/webami-suggestions?search=true&variant_id=${encodeURIComponent(p.variant_id)}`);
                             items.length ? this._match(p, items) : Toast.info('No search results');
                         } catch (e) { Toast.error(e.message); }
                     }
                 },
                 {
                     label: 'Ignore', onClick: async () => {
-                        await API.post(`/api/matches/${encodeURIComponent(p.product_id)}/ignore`);
+                        await API.post(`/api/matches/${encodeURIComponent(p.variant_id)}/ignore`);
                         Modal.close(); this._load();
                     }
                 },

@@ -23,6 +23,10 @@ from app.db.webami_products import (
     good_match,
     reset_webami_products,
     drop_from_match_cache,
+    list_unmatched_variants, 
+    variant_kws, 
+    kw_eval,
+    suggest_parts
 )
 
 
@@ -46,5 +50,6 @@ __all__: list[str] = [
     "get_incomplete_order_guids",
     # Webami product functions
     "get_unresolved_items", "save_webami_product", "get_webami_product_by_id", "suggest_local", "suggest_title", 
-    "ignore_product", "list_unmatched", "good_match", "reset_webami_products", "drop_from_match_cache"
+    "ignore_product", "list_unmatched", "good_match", "reset_webami_products", "drop_from_match_cache",
+    "list_unmatched_variants", "variant_kws", "kw_eval", "suggest_parts"
 ]
