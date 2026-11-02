@@ -132,8 +132,13 @@ export class MatchesPage {
           </div>
           <label class="check-row"><input type="checkbox" name="upd"><span>Update product and variant titles</span></label>`;
         const f = n => body.querySelector(`[name=${n}]`);
-        const vt = () => [f('edition').value.trim() || 'Standard',
-          f('color').value.trim() || 'None', f('attributes').value.trim() || 'None'].join(' | ');
+        const vt = () => {
+            const none = s => !s || s.toLowerCase() === 'none';
+            const color = f('color').value.trim(), attrs = f('attributes').value.trim();
+            return [f('edition').value.trim() || 'Standard',
+              none(color) ? null : color, none(attrs) ? null : attrs]
+              .filter(Boolean).join(' | ');
+          };
         const sync = () => {
           f('vtitle').value = vt();
           f('upd').checked = f('title').value.trim() !== p.title || f('vtitle').value !== p.variant_title;

@@ -296,7 +296,8 @@ class ShopifyClient:
                 v["inventoryItem"] = inv
             if "title" in f:
                 options = options or self._option_names(product_id)
-                parts = [s.strip() for s in f["title"].split(" / ")]
+                parts = ([f["title"].strip()] if len(options) == 1
+                         else [s.strip() for s in f["title"].split(" / ")])
                 if len(parts) != len(options):
                     raise RuntimeError(f"Variant title needs {len(options)} part(s) separated by ' / '")
                 v["optionValues"] = [{"optionName": o, "name": n} for o, n in zip(options, parts)]

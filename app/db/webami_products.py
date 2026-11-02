@@ -4,18 +4,13 @@ import re
 
 from app import config
 from app.db.connection import get_conn, rows, transaction
-from app.webami.webami_helper import _ATTRS, _COLOR_RE, _COLS, _FEAT, norm
+from app.webami.webami_helper import _ATTR_SET, _COLOR_ONLY, _COLOR_WORDS, _COLS, _FEAT, _IGNORE_KW, _SKIP_FEAT, norm
 
 
 logger: logging.Logger = logging.getLogger(__name__)
 _cache: dict = {"key": None, "data": None}
 
 MATCH_MIN = 0.70
-_IGNORE_KW = {"black", "vinyl", "lp", "standard", "none", "explicit"}
-_COLOR_ONLY = re.compile(
-    rf"^(?:{_COLOR_RE}|\d{{3}}\s?g(?:ram)?(?:\s+{_COLOR_RE})?|picture\s+disc|zoetrope)$", re.I)
-_ATTR_SET = {norm(a) for a in _ATTRS}
-_SKIP_FEAT = {"vinyl", "lp"}
 
 def sim(a, b) -> float:
     a, b = norm(a), norm(b)
@@ -136,8 +131,6 @@ def suggest_title(shopify_title: str, webami_title: str, features: str | None = 
             continue
         for f in (_FEAT.findall(chunk) or [chunk]):
             add(f)
-    for f in _FEAT.findall(description or ""):
-        add(f)
     return f"{shopify_title} ({', '.join(feats)})" if feats else shopify_title
 
 
@@ -177,7 +170,7 @@ def kw_eval(p: dict, w: dict) -> tuple[list[str], list[str]]:
         return [], []
     need = variant_kws(p["variant_title"])
     strict = kws(w.get("title")) | kws(w.get("features"))
-    have = strict | kws(w.get("description"))
+    have = strict
     return sorted(need - have), sorted(strict - need)
 
 
@@ -193,32 +186,86 @@ def feature_list(w: dict) -> list[str]:
     for c in re.split(r"[;,]", re.sub(r"^[\[\(]|[\]\)]$", "", (w.get("features") or "").strip())):
         if not re.search(r"explicit|parental", c, re.I):
             out += _FEAT.findall(c) or [c]
-    out += _FEAT.findall(w.get("description") or "")
     return out
 
 
+# def suggest_parts(w: dict) -> dict:
+#     """Suggested product title, edition, color, attributes from a WebAMI product."""
+#     ed: list[str] = []
+#     col: list[str] = []
+#     at: list[str] = []
+#     seen: set[str] = set()
+#     for f in feature_list(w):
+#         f = re.sub(r"\s+", " ", f).strip(" -–,/")
+#         n = norm(f)
+#         if not n or n in seen or n in _SKIP_FEAT or "explicit" in n:
+#             continue
+#         seen.add(n)
+#         if n in _ATTR_SET:
+#             at.append(f)
+#         elif _COLOR_ONLY.match(f) or n in _COLOR_WORDS:
+#             col.append(f)
+#         else:
+#             ed.append(f)
+#     return {"title": _simplify(w.get("title")),
+#             "edition": " - ".join(ed) or "Standard",
+#             "color": col[0] if col else "None",
+#             "attributes": ", ".join(at) or "None"}
 def suggest_parts(w: dict) -> dict:
     """Suggested product title, edition, color, attributes from a WebAMI product."""
     ed: list[str] = []
     col: list[str] = []
     at: list[str] = []
     seen: set[str] = set()
+
     for f in feature_list(w):
         f = re.sub(r"\s+", " ", f).strip(" -–,/")
         n = norm(f)
+
         if not n or n in seen or n in _SKIP_FEAT or "explicit" in n:
             continue
+
         seen.add(n)
-        if _COLOR_ONLY.match(f):
-            col.append(f if re.search(r"vinyl|disc|zoetrope", f, re.I) else f"{f} Vinyl")
-        elif n in _ATTR_SET:
+
+        if n in _ATTR_SET:
             at.append(f)
+        elif (
+            _COLOR_ONLY.match(f)
+            or n in _COLOR_WORDS
+            or n in {f"{c} vinyl" for c in _COLOR_WORDS}
+        ):
+            col.append(f)
         else:
             ed.append(f)
-    return {"title": _simplify(w.get("title")),
-            "edition": " - ".join(ed) or "Standard",
-            "color": col[0] if col else "None",
-            "attributes": ", ".join(at) or "None"}
+
+    # Ignore generic Colored Vinyl when specific colors exist.
+    specific_colors = [
+        c for c in col
+        if norm(c) not in {"colored vinyl", "colored"}
+    ]
+
+    if specific_colors:
+        col = specific_colors
+
+    # Combine color descriptors into one value.
+    col = list(dict.fromkeys(col))
+
+    if col:
+        color = ", ".join(
+            c for c in col
+            if not re.search(r"\bvinyl\b", c, re.I)
+        )
+        color = re.sub(r",\s*([^,]+)$", r" & \1", color)
+        color += " Vinyl"
+    else:
+        color = "None"
+
+    return {
+        "title": _simplify(w.get("title")),
+        "edition": " - ".join(ed) or "Standard",
+        "color": color,
+        "attributes": ", ".join(at) or "None"
+    }
 
 
 def suggest_local(p: dict, idx: dict | None = None) -> list[dict]:

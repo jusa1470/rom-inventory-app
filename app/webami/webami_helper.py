@@ -10,7 +10,7 @@ _EDITIONS = [
     "Brick & Mortar Exclusive", "Limited Deluxe Edition", "Deluxe Limited Edition",
     "Expanded Limited Edition", "Limited Edition", "Ultimate Deluxe", "Japanese Deluxe",
     "Deluxe Edition", "Deluxe", "Expanded Edition", "Expanded", "Extended", "Complete",
-    "Special Edition", "Legendary Edition", "Legendary", "Redux", "Instrumental", "Unmixed",
+    "Special Edition", "Legendary Edition", "Redux", "Instrumental", "Unmixed",
     "Remastered Reissue", "Remastered", "Remaster", "Reissue", "Re-issue", "Revinyl",
     "Rhino Reserve", "Rhino High Fidelity", "Rocktober", "Original Jazz Classics Series",
     "Chess Acoustic Sounds Series", "Blue Note Tone Poet", "Blue Note Classic Vinyl",
@@ -23,7 +23,7 @@ _ATTRS = [
     "Digital Download Card", "Mask Cover", "Bonus Tracks", "Bonus Track", "Added Track",
     "Bonus LP", "Bonus CD", "Bonus 7-Inch", "Poster", "Lithograph", "Sticker",
     "Signed Polaroid", "Signed Postcard", "Signed", "Alternative Cover", "Alternate Artwork",
-    "Import", "Extended Play", "Mono",
+    "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Sticker", "Stickers",
 ]
 _COLOR_WORDS = [
     "black", "white", "red", "blue", "green", "yellow", "pink", "orange", "purple", "gold",
@@ -40,8 +40,15 @@ _COLOR_WORDS = [
     "vanilla", "citrus", "seafoam", "royal", "blush", "ocean", "evergreen", "moonstone",
     "eggshell", "coffee", "heavyweight", "ecorecord", "recycled", "biovinyl",
 ]
-_COLOR_RE = (r"(?:(?:%s)(?:\s+|/|-)?)+\s*(?:vinyl|picture\s+disc)?"
-             % "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)))
+# _COLOR_RE = (r"(?:(?:%s)(?:\s+|/|-)?)+\s*(?:vinyl|picture\s+disc)?"
+#              % "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)))
+_COLOR_RE = (
+    r"(?:(?:%s)(?:(?:\s+|/|-)(?:%s))*)"
+    % (
+        "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)),
+        "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True))
+    )
+)
 
 def _alt(items):
     return "|".join(re.escape(i) for i in sorted(items, key=len, reverse=True))
@@ -50,10 +57,21 @@ _FEAT = re.compile(
     r"(?<![\w])(?:(?:\d+(?:st|nd|rd|th)\s+anniversary(?:\s+(?:deluxe|remaster|reissue))?)|"
     r"(?:\d{4}\s+(?:remaster|reissue|repress|stereo))|(?:\d+\s+year)|"
     r"(?:%s)|(?:%s)|(?:\d{3}\s?g(?:ram)?\s+(?:%s)|\d{3}\s?g(?:ram)?)|"
-    r"(?:%s\s+vinyl)|picture\s+disc|zoetrope)(?![\w])"
+    r"(?:%s(?:\s+vinyl)?)|picture\s+disc|zoetrope)(?![\w])"
     % (_alt(_EDITIONS), _alt(_ATTRS), _COLOR_RE, _COLOR_RE), re.I)
 
 
 def norm(s) -> str:
     s = re.sub(r"[\[\(]\s*explicit( content)?\s*[\]\)]", " ", s or "", flags=re.I)
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+_IGNORE_KW = {"black", "vinyl", "lp", "standard", "none", "explicit"}
+_COLOR_ONLY = re.compile(
+    rf"^(?:{_COLOR_RE})(?:\s+vinyl)?$|"
+    rf"^\d{{3}}\s?g(?:ram)?$|"
+    rf"^picture\s+disc$|^zoetrope$",
+    re.I
+)
+_ATTR_SET = {norm(a) for a in _ATTRS}
+_SKIP_FEAT = {"vinyl", "lp"}

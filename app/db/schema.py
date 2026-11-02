@@ -127,6 +127,21 @@ MIGRATIONS: list[str] = [
         product_id TEXT PRIMARY KEY,
         created_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE price_checks (
+        variant_id    TEXT PRIMARY KEY,
+        upc           TEXT,
+        wm_upc        TEXT,
+        wm_title      TEXT,
+        new_cost      REAL,
+        status        TEXT NOT NULL,
+        suggest_upc   TEXT,
+        suggest_title TEXT,
+        checked_at    TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE price_queue (
+        variant_id TEXT PRIMARY KEY,
+        new_price  REAL NOT NULL
+    );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);
     CREATE INDEX IF NOT EXISTS idx_products_upc         ON shopify_products(upc);
@@ -138,6 +153,7 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_webami_products_fp   ON webami_products(fingerprint);
     CREATE INDEX IF NOT EXISTS idx_webami_ids_product   ON webami_product_ids(product_id);
     CREATE INDEX IF NOT EXISTS idx_webami_items_prod    ON webami_order_items(product_id);
+    CREATE INDEX IF NOT EXISTS idx_price_checks_status  ON price_checks(status);
     CREATE VIEW shopify_upcs AS
         SELECT upc, product_id, NULL AS variant_id, 'product' AS source
           FROM shopify_products WHERE upc IS NOT NULL AND upc != ''

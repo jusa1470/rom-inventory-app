@@ -14,6 +14,8 @@ const SYNCS = [
     meta: 'Pull new WebAMI orders and order items' },
   { key: 'webami-products', name: 'WebAMI Products', url: '/api/sync/webami-products',
     unit: 'order items', hidden: true },
+  { key: 'prices', name: 'Price Check', url: '/api/sync/prices', unit: 'variants',
+    meta: 'Look up current WebAMI costs for every variant with a UPC' },
 ];
 
 export class DashboardPage {

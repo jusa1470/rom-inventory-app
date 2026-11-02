@@ -2,6 +2,7 @@ import { API, setUnauthorizedHandler } from './api.js';
 import { DashboardPage } from './pages/dashboard_page.js';
 import { MatchesPage } from './pages/matches_page.js';
 import { OrdersPage } from './pages/orders_page.js';
+import { PricesPage } from './pages/prices_page.js';
 import { ProductsPage } from './pages/products_page.js';
 import { renderLogin } from './pages/login_page.js';
 import { SettingsPage } from './pages/settings_page.js';
@@ -10,6 +11,7 @@ const NAV = [
   { hash: '#dashboard', label: 'Dashboard' },
   { hash: '#products', label: 'Products' },
   { hash: '#matches', label: 'Matches' },
+  { hash: '#prices', label: 'Prices' },
   { hash: '#orders', label: 'Orders' },
   { hash: '#settings', label: 'Settings' },
 ];
@@ -18,6 +20,7 @@ const PAGES = {
   '#dashboard': DashboardPage,
   '#products': ProductsPage,
   '#matches': MatchesPage,
+  '#prices': PricesPage,
   '#orders': OrdersPage,
   '#settings': SettingsPage,
 };

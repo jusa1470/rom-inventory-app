@@ -1,5 +1,9 @@
 from app.db.app_config import get_config, is_dry_run, upsert_config
 from app.db.connection import get_conn, transaction
+from app.db.prices import (
+    get_price_variants, save_price_check, resolve_price_check, list_price_changes,
+    price_queue_add, price_queue_remove, price_queue_filtered, price_queue_set, list_price_queue,
+)
 from app.db.schema import init_db as _apply_schema
 from app.db.shopify_products import (
     count_products,
@@ -40,6 +44,9 @@ __all__: list[str] = [
     "get_config", "is_dry_run", "upsert_config",
     # Connection functions
     "get_conn", "transaction",
+    # Price functions
+    "get_price_variants", "save_price_check", "resolve_price_check", "list_price_changes",
+    "price_queue_add", "price_queue_remove", "price_queue_filtered", "price_queue_set", "list_price_queue",
     # Shopify product functions
     "count_products", "get_filter_options", "get_product_detail", "list_products", "save_shopify_product", 
     "update_local", "delete_products_not_synced_since",
