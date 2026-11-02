@@ -10,3 +10,4 @@ vault.enc.bak
 .secret_key
 shopify_token.py
 .vscode/
+push_backups/
