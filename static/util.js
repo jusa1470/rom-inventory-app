@@ -69,3 +69,9 @@ export function el(html) {
     container.querySelectorAll('[data-p]').forEach(btn =>
       btn.addEventListener('click', () => onPage(+btn.dataset.p)));
   }
+
+  export function variantTitle(edition, color, attrs) {
+    const none = s => !s || s.toLowerCase() === 'none';
+    return [edition || 'Standard', none(color) ? null : color, none(attrs) ? null : attrs]
+      .filter(Boolean).join(' | ');
+  }

@@ -1,5 +1,5 @@
+"""Pure text helpers and keyword constants. Must not import anything from app.*"""
 import re
-
 
 _COLS = ("title", "artist", "vendor", "features", "product_type", "sku", "upc",
          "price", "your_price", "wmsid", "href", "description")
@@ -21,9 +21,9 @@ _EDITIONS = [
 _ATTRS = [
     "Gatefold LP Jacket", "Gatefold", "7in Box Set", "Box Set", "Booklet",
     "Digital Download Card", "Mask Cover", "Bonus Tracks", "Bonus Track", "Added Track",
-    "Bonus LP", "Bonus CD", "Bonus 7-Inch", "Poster", "Lithograph", "Sticker",
+    "Bonus LP", "Bonus CD", "Bonus 7-Inch", "Poster", "Lithograph", "Sticker", "Stickers",
     "Signed Polaroid", "Signed Postcard", "Signed", "Alternative Cover", "Alternate Artwork",
-    "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Sticker", "Stickers",
+    "Import", "Extended Play", "Mono", "With Book", "With Booklet",
 ]
 _COLOR_WORDS = [
     "black", "white", "red", "blue", "green", "yellow", "pink", "orange", "purple", "gold",
@@ -40,24 +40,19 @@ _COLOR_WORDS = [
     "vanilla", "citrus", "seafoam", "royal", "blush", "ocean", "evergreen", "moonstone",
     "eggshell", "coffee", "heavyweight", "ecorecord", "recycled", "biovinyl",
 ]
-# _COLOR_RE = (r"(?:(?:%s)(?:\s+|/|-)?)+\s*(?:vinyl|picture\s+disc)?"
-#              % "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)))
-_COLOR_RE = (
-    r"(?:(?:%s)(?:(?:\s+|/|-)(?:%s))*)"
-    % (
-        "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)),
-        "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True))
-    )
-)
+_COLOR_RE = (r"(?:(?:%s)(?:\s+|/|-)?)+\s*(?:vinyl|picture\s+disc)?"
+             % "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)))
+
 
 def _alt(items):
     return "|".join(re.escape(i) for i in sorted(items, key=len, reverse=True))
+
 
 _FEAT = re.compile(
     r"(?<![\w])(?:(?:\d+(?:st|nd|rd|th)\s+anniversary(?:\s+(?:deluxe|remaster|reissue))?)|"
     r"(?:\d{4}\s+(?:remaster|reissue|repress|stereo))|(?:\d+\s+year)|"
     r"(?:%s)|(?:%s)|(?:\d{3}\s?g(?:ram)?\s+(?:%s)|\d{3}\s?g(?:ram)?)|"
-    r"(?:%s(?:\s+vinyl)?)|picture\s+disc|zoetrope)(?![\w])"
+    r"(?:%s)|picture\s+disc|zoetrope)(?![\w])"
     % (_alt(_EDITIONS), _alt(_ATTRS), _COLOR_RE, _COLOR_RE), re.I)
 
 
@@ -68,10 +63,34 @@ def norm(s) -> str:
 
 _IGNORE_KW = {"black", "vinyl", "lp", "standard", "none", "explicit"}
 _COLOR_ONLY = re.compile(
-    rf"^(?:{_COLOR_RE})(?:\s+vinyl)?$|"
-    rf"^\d{{3}}\s?g(?:ram)?$|"
-    rf"^picture\s+disc$|^zoetrope$",
-    re.I
-)
+    rf"^(?:{_COLOR_RE}|\d{{3}}\s?g(?:ram)?(?:\s+{_COLOR_RE})?|picture\s+disc|zoetrope)$", re.I)
 _ATTR_SET = {norm(a) for a in _ATTRS}
+_ED_SET = {norm(e) for e in _EDITIONS}
 _SKIP_FEAT = {"vinyl", "lp"}
+
+
+def simplify(t: str) -> str:
+    """Title without (…)/[…] and without anything after ' - '."""
+    t = re.sub(r"[\[\(].*?[\]\)]", " ", t or "")
+    return re.split(r"\s+-\s+", t, maxsplit=1)[0].strip()
+
+
+def tokens(s) -> set[str]:
+    return {t for t in norm(s).split() if len(t) > 2}
+
+
+def fingerprint(d: dict) -> str:
+    return "|".join(norm(d.get(k)) for k in ("title", "artist", "vendor", "product_type"))
+
+
+def format_ok(shopify_type: str | None, wfmt: str | None) -> bool:
+    t, f = (shopify_type or "").lower(), (wfmt or "").lower()
+    if not t or not f:
+        return True
+    if t == "vinyl":
+        return any(k in f for k in ("lp", "vinyl", "single"))
+    if t == "cd":
+        return f == "cd"
+    if t == "cassette":
+        return "cassette" in f
+    return True

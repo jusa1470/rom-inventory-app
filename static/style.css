@@ -295,3 +295,6 @@ select.input { cursor: pointer; }
   border-radius: 50%; vertical-align: -2px; animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.pair { display: flex; flex-direction: column; gap: 2px; }
+.pair .sub { color: var(--text-muted); font-size: 12px; }

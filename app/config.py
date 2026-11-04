@@ -14,7 +14,7 @@ WEBAMI_BASE_URL = os.environ.get("RECORDSYNC_WEBAMI_URL", "https://webami.aent.c
 WEBAMI_PAGE_SIZE = 250
 WEBAMI_WORKERS_START = 4
 WEBAMI_WORKERS_MIN = 1
-WEBAMI_WORKERS_MAX = 16
+WEBAMI_WORKERS_MAX = 10
 WEBAMI_MATCH_MIN = 0.7
 
 # Must exactly match a redirect URL registered on the Shopify app.

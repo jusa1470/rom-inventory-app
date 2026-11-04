@@ -313,7 +313,12 @@ export class ProductsPage {
       ['tags', 'Tags (comma separated)', listText(p.tags)],
     ];
     const VF = v => [
-      ['title', 'Title', v.title], ['upc', 'UPC', v.upc],
+      ...(() => {
+        const [e, c, a] = (v.title || '').split(' | ');
+        return [['edition', 'Edition', e || 'Standard'], ['color', 'Color', c || ''],
+                ['attributes', 'Attributes', a || '']];
+      })(),
+      ['upc', 'UPC', v.upc],
       ['description', 'Description', v.description],
       ['release_date', 'Release date', v.release_date],
       ['variant_tags', 'Variant tags', v.variant_tags], ['price', 'Price', v.price],
@@ -357,6 +362,11 @@ export class ProductsPage {
       const variants = [...body.querySelectorAll('[data-vid]')].map(r => {
         const f = changed(r);
         if (!Object.keys(f).length) return null;
+        if ('edition' in f || 'color' in f || 'attributes' in f) {
+          const g = n => r.querySelector(`[name="${n}"]`).value.trim();
+          f.title = variantTitle(g('edition'), g('color'), g('attributes'));
+        }
+        delete f.edition; delete f.color; delete f.attributes;
         if ('inventory_quantity' in f) {
           f.inventory_quantity = parseInt(String(f.inventory_quantity), 10);
         }

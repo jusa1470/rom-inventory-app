@@ -4,6 +4,7 @@ import logging
 import re
 import threading
 from datetime import datetime
+import time
 
 import requests
 from bs4 import BeautifulSoup
@@ -191,6 +192,7 @@ class WebamiClient:
         for _ in range(4):
             with self.limiter:
                 try:
+                    start = time.monotonic()
                     r = self._session().get(path if path.startswith("http") else f"{self.base}{path}", params=params, timeout=30)
                 except requests.Timeout:
                     self.limiter.throttled()
@@ -202,7 +204,7 @@ class WebamiClient:
                 self._local.s = None
                 continue
             r.raise_for_status()
-            self.limiter.success()
+            self.limiter.success(time.monotonic() - start)
             return r.text
         raise RuntimeError("WebAMI: throttled or session rejected")
 
@@ -231,6 +233,7 @@ class WebamiClient:
     
     def fetch_price(self, upc: str) -> float | None:
         with self.limiter:
+            start = time.monotonic()
             r = self._session().post(
                 f"{self.base}/ajax/priceavail",
                 data={"ids": upc},
@@ -244,7 +247,7 @@ class WebamiClient:
             self.limiter.throttled(float(r.headers.get("Retry-After", 0) or 0))
             return None
         r.raise_for_status()
-        self.limiter.success()
+        self.limiter.success(time.monotonic() - start)
         data = r.json()
         if data and data[0].get("Price"):
             return _money(str(data[0]["Price"]))

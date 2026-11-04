@@ -6,7 +6,7 @@ import { Fmt, buildPager, debounce, esc, truncCell } from '../util.js';
 const margin = (price, cost) =>
   price > 0 ? `${(((price - cost) / price) * 100).toFixed(1)}%` : '—';
 const move = (a, b) => `${Fmt.price(a)} → ${Fmt.price(b)}`;
-const tone = (a, b) => (b > a ? 'var(--red)' : b < a ? 'var(--green)' : 'inherit');
+const tone = (a, b) => (b > a ? 'var(--orange)' : b < a ? 'var(--blue)' : 'inherit');
 
 export class PricesPage {
   constructor() {
