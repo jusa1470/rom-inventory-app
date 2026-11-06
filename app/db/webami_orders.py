@@ -1,4 +1,4 @@
-from app.db.connection import get_conn, rows, transaction
+from app.db.connection import get_conn, row, rows, transaction
 
 
 def get_known_order_guids() -> set[str]:
@@ -60,7 +60,10 @@ def get_webami_order(guid: str):
         return None
     order = dict(order)
     order["items"] = rows(conn.execute(
-        "SELECT * FROM webami_order_items WHERE order_guid=? ORDER BY position",
+        "SELECT i.*, COALESCE((SELECT SUM(qty) FROM receipts r WHERE r.order_guid=i.order_guid "
+        "AND r.upc=i.upc),0) AS received, "
+        "(SELECT variant_id FROM shopify_variants v WHERE v.upc=i.upc LIMIT 1) AS variant_id "
+        "FROM webami_order_items i WHERE i.order_guid=? ORDER BY position",
         (guid,)).fetchall())
     return order
 
@@ -83,3 +86,15 @@ def get_incomplete_order_guids() -> set[str]:
         "SELECT o.guid FROM webami_orders o "
         "LEFT JOIN webami_order_items i ON i.order_guid = o.guid "
         "GROUP BY o.guid HAVING COUNT(i.id) != o.sku_count")}
+
+
+def get_variant_by_upc(upc: str):
+    return row(get_conn().execute(
+        "SELECT variant_id, product_id, inventory_item_id, inventory_quantity "
+        "FROM shopify_variants WHERE upc=? LIMIT 1", (upc,)).fetchone())
+
+
+def log_receipt(guid: str, upc: str, qty: int, variant_id) -> None:
+    with transaction() as conn:
+        conn.execute("INSERT INTO receipts (order_guid, upc, qty, variant_id) VALUES (?,?,?,?)",
+                     (guid, upc, qty, variant_id))

@@ -160,6 +160,11 @@ MIGRATIONS: list[str] = [
         artist_key TEXT NOT NULL,
         PRIMARY KEY (vendor_key, artist_key)
     );
+    CREATE TABLE receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_guid TEXT NOT NULL, upc TEXT NOT NULL, qty INTEGER NOT NULL,
+        variant_id TEXT, created_at TEXT DEFAULT (datetime('now'))
+    );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);
     CREATE INDEX IF NOT EXISTS idx_products_upc         ON shopify_products(upc);
@@ -172,6 +177,8 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_webami_ids_product   ON webami_product_ids(product_id);
     CREATE INDEX IF NOT EXISTS idx_webami_items_prod    ON webami_order_items(product_id);
     CREATE INDEX IF NOT EXISTS idx_price_checks_status  ON price_checks(status);
+    CREATE INDEX idx_receipts_order ON receipts(order_guid, upc);
+    
     CREATE VIEW shopify_upcs AS
         SELECT upc, product_id, NULL AS variant_id, 'product' AS source
           FROM shopify_products WHERE upc IS NOT NULL AND upc != ''
