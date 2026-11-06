@@ -27,6 +27,31 @@ const PAGES = {
 
 const root = document.getElementById('root');
 let currentPage = null;
+const AUTO_SYNC_MS = 30 * 60 * 1000;
+const WEBAMI_MS = 24 * 60 * 60 * 1000;
+let autoSyncTimer = null;
+let autoSyncBusy = false;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function runJob(url) {
+  try {
+    const { job_id } = await API.post(url);
+    while ((await API.get(`/api/sync/status/${job_id}`)).status === 'running') await sleep(2000);
+  } catch (_) {}
+}
+
+async function autoSync() {
+  if (autoSyncBusy) return;
+  autoSyncBusy = true;
+  await runJob('/api/sync/shopify?full=false');
+  let last = 0;
+  try { last = +localStorage.getItem('webamiLastSync') || 0; } catch (_) {}
+  if (Date.now() - last >= WEBAMI_MS) {
+    await runJob('/api/sync/webami');
+    try { localStorage.setItem('webamiLastSync', String(Date.now())); } catch (_) {}
+  }
+  autoSyncBusy = false;
+}
 
 function renderShell() {
   root.innerHTML = `
@@ -63,6 +88,7 @@ async function navigate(hash) {
 }
 
 function showLogin() {
+  clearInterval(autoSyncTimer);
   window.onhashchange = null;
   if (currentPage && currentPage.destroy) currentPage.destroy();
   currentPage = null;
@@ -77,6 +103,9 @@ async function logout() {
 
 async function start() {
   renderShell();
+  autoSync();
+  clearInterval(autoSyncTimer);
+  autoSyncTimer = setInterval(autoSync, AUTO_SYNC_MS);
   window.onhashchange = () => navigate(location.hash);
   navigate(location.hash);
   API.get('/api/settings')
