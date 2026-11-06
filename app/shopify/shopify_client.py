@@ -11,7 +11,11 @@ from app.shopify.queries import (
     M_BULK_CANCEL,
     M_BULK_RUN,
     M_INVENTORY_SET,
+    M_METAFIELDS_DELETE,
+    M_OPTION_UPDATE,
     M_PRODUCT_UPDATE,
+    M_VARIANT_MEDIA,
+    M_VARIANTS_CREATE,
     M_VARIANTS_UPDATE,
     Q_BULK_STATUS,
     Q_PRODUCT_OPTIONS,
@@ -26,6 +30,7 @@ from app.shopify.queries import (
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
+OPTION_NAME = "Edition | Color | Attributes"
 
 
 def _mfs(f: dict, entries: list, cfg: dict) -> list[dict]:
@@ -268,17 +273,40 @@ class ShopifyClient:
                 inp[api] = f[local]
         if "category_id" in f:
             inp["category"] = f"gid://shopify/TaxonomyCategory/{f['category_id']}"
-        mfs = _mfs(f, BULK_PRODUCT_MF, cfg)
+        clear = [a for a, _, _ in BULK_PRODUCT_MF if f.get(a) == ""]
+        mfs = _mfs({k: v for k, v in f.items() if not (k in clear)}, BULK_PRODUCT_MF, cfg)
         if mfs:
             inp["metafields"] = mfs
-        data = self.gql(M_PRODUCT_UPDATE, {"product": inp})
-        errs = (data.get("productUpdate") or {}).get("userErrors")
-        if errs:
-            raise RuntimeError(f"productUpdate: {errs}")
+        if len(inp) > 1:
+            data = self.gql(M_PRODUCT_UPDATE, {"product": inp})
+            errs = (data.get("productUpdate") or {}).get("userErrors")
+            if errs:
+                raise RuntimeError(f"productUpdate: {errs}")
+        if clear:
+            ids = [{"ownerId": f"gid://shopify/Product/{product_id}",
+                    "namespace": cfg[ns], "key": cfg[key]}
+                   for a, ns, key in BULK_PRODUCT_MF if a in clear]
+            data = self.gql(M_METAFIELDS_DELETE, {"metafields": ids})
+            errs = (data.get("metafieldsDelete") or {}).get("userErrors")
+            if errs:
+                raise RuntimeError(f"metafieldsDelete: {errs}")
 
     def _option_names(self, product_id: str) -> list[str]:
         data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
         return [o["name"] for o in (data.get("product") or {}).get("options", [])]
+    
+    def _rename_option(self, product_id: str) -> list[str]:
+        data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
+        opts = (data.get("product") or {}).get("options", [])
+        if len(opts) == 1 and opts[0]["name"] != OPTION_NAME:
+            res = self.gql(M_OPTION_UPDATE, {
+                "productId": f"gid://shopify/Product/{product_id}",
+                "option": {"id": opts[0]["id"], "name": OPTION_NAME}})
+            errs = (res.get("productOptionUpdate") or {}).get("userErrors")
+            if errs:
+                raise RuntimeError(f"optionUpdate: {errs}")
+            return [OPTION_NAME]
+        return [o["name"] for o in opts]
 
     def update_variants(self, product_id: str, variants: list[dict], cfg: dict) -> None:
         options: Optional[list[str]] = None
@@ -333,6 +361,51 @@ class ShopifyClient:
             errs = (data.get("inventorySetQuantities") or {}).get("userErrors")
             if errs:
                 raise RuntimeError(f"inventorySetQuantities: {errs}")
+    
+    def create_variants(self, product_id: str, variants: list[dict], cfg: dict) -> list[dict]:
+        options = self._rename_option(product_id)
+        bulk: list[dict] = []
+        for f in variants:
+            v: dict[str, Any] = {}
+            if f.get("barcode"):
+                v["barcode"] = f["barcode"]
+            if "price" in f:
+                v["price"] = f["price"]
+            inv: dict[str, Any] = {}
+            if "cost" in f:
+                inv["cost"] = f["cost"]
+            if "weight" in f:
+                inv["measurement"] = {"weight": {"value": f["weight"], "unit": "POUNDS"}}
+            if inv:
+                v["inventoryItem"] = inv
+            title = (f.get("title") or "Standard").strip()
+            parts = [title] if len(options) == 1 else [s.strip() for s in title.split(" / ")]
+            if len(parts) != len(options):
+                raise RuntimeError(f"Variant title needs {len(options)} part(s) separated by ' / '")
+            v["optionValues"] = [{"optionName": o, "name": n} for o, n in zip(options, parts)]
+            mfs = _mfs(f, BULK_VARIANT_MF, cfg)
+            if mfs:
+                v["metafields"] = mfs
+            if "inventory_quantity" in f and cfg.get("shopify_location_id"):
+                v["inventoryQuantities"] = [{"availableQuantity": f["inventory_quantity"],
+                                             "locationId": cfg["shopify_location_id"]}]
+            bulk.append(v)
+        data = self.gql(M_VARIANTS_CREATE, {
+            "productId": f"gid://shopify/Product/{product_id}", "variants": bulk})
+        res = data.get("productVariantsBulkCreate") or {}
+        if res.get("userErrors"):
+            raise RuntimeError(f"variantsCreate: {res['userErrors']}")
+        links = [{"variantId": n["id"], "mediaIds": [f"gid://shopify/MediaImage/{f['media_id']}"]}
+                 for n, f in zip(res["productVariants"], variants) if f.get("media_id")]
+        if links:
+            r = self.gql(M_VARIANT_MEDIA, {
+                "productId": f"gid://shopify/Product/{product_id}", "variantMedia": links})
+            errs = (r.get("productVariantAppendMedia") or {}).get("userErrors")
+            if errs:
+                raise RuntimeError(f"variantMedia: {errs}")
+        return [{"id": n["id"].rsplit("/", 1)[-1],
+                 "inventory_item_id": n["inventoryItem"]["id"].rsplit("/", 1)[-1]}
+                for n in res["productVariants"]]
 
     # ── Locations ─────────────────────────────────────────────────────────────
 

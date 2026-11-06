@@ -2,7 +2,8 @@
 import re
 
 _COLS = ("title", "artist", "vendor", "features", "product_type", "sku", "upc",
-         "price", "your_price", "wmsid", "href", "description")
+         "price", "your_price", "wmsid", "href", "description", "release_date", 
+         "weight", "weight_unit", "image_url", "genres")
 
 _EDITIONS = [
     "Indie Exclusive", "RSD Exclusive", "RSD Black Friday 2025", "RSD 2026", "RSD Essential",
@@ -23,7 +24,7 @@ _ATTRS = [
     "Digital Download Card", "Mask Cover", "Bonus Tracks", "Bonus Track", "Added Track",
     "Bonus LP", "Bonus CD", "Bonus 7-Inch", "Poster", "Lithograph", "Sticker", "Stickers",
     "Signed Polaroid", "Signed Postcard", "Signed", "Alternative Cover", "Alternate Artwork",
-    "Import", "Extended Play", "Mono", "With Book", "With Booklet",
+    "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Photo / Photo Card"
 ]
 _COLOR_WORDS = [
     "black", "white", "red", "blue", "green", "yellow", "pink", "orange", "purple", "gold",

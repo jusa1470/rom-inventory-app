@@ -25,20 +25,23 @@ class ProductIn(BaseModel):
     genres: list[str] | None = None
     type: str | None = None
     upc: str | None = None
+    release_date: str | None = None
 
 
 class VariantIn(BaseModel):
-    id: str
+    id: str | None = None
     inventory_item_id: str | None = None
     title: str | None = None
     upc: str | None = None
     description: str | None = None
     release_date: str | None = None
     variant_tags: str | None = None
+    media_id: str | None = None
     price: str | None = None
     cost: str | None = None
     inventory_quantity: int | None = None
     weight: float | None = None
+    barcode: str | None = None
 
 
 class ProductUpdate(BaseModel):
@@ -132,6 +135,10 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
                               "artist": page.get("artist") or r["artist"],
                               "features": page.get("features"),
                               "description": page.get("description"),
+                              "release_date": page.get("release_date"),
+                              "genres": page.get("genres"),
+                              "weight": page.get("weight"),
+                              "weight_unit": page.get("weight_unit"),
                               "product_type": page.get("product_type") or r["format"],
                               "upc": r["upc"], "price": page.get("price"),
                               "tier": 2, "source": "search (page verified)",
@@ -142,6 +149,8 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
         except Exception as e:
             raise HTTPException(502, str(e))
     cands.sort(key=lambda c: c["tier"])
+    db.decorate_candidates(variant_id, cands)
+    p["siblings"] = [x for x in p["variants"] if x["variant_id"] != variant_id]
     for c in cands:
         c["suggested"] = db.suggest_parts(c)
     return {"items": cands[:15]}
@@ -160,7 +169,9 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
     if db.is_dry_run():
         return {"ok": True, "dry_run": True}
     p = body.product.model_dump(exclude_unset=True)
-    vs = [v.model_dump(exclude_unset=True) for v in body.variants]
+    all_vs = [v.model_dump(exclude_unset=True) for v in body.variants]
+    new_vs = [v for v in all_vs if not v.get("id")]
+    vs = [v for v in all_vs if v.get("id")]
     cfg = db.get_config()
     client = ShopifyClient(
         creds["shopify_store"], creds["shopify_token"],
@@ -175,9 +186,12 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
             client.update_product(product_id, p, cfg)
         if vs:
             client.update_variants(product_id, vs, cfg)
+        created = client.create_variants(product_id, new_vs, cfg) if new_vs else []
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.update_local(product_id, p, vs)
+    if new_vs:
+        db.add_local_variants(product_id, new_vs, created)
     for v in vs:
         if v.get("upc"):
             db.drop_from_match_cache(v["id"])

@@ -6,16 +6,24 @@ const POLL_MS = 1000;
 const EXPORT_RE = /preparing the export/i;
 const LOG_BADGES = { done: 'badge-new', partial: 'badge-used', cancelled: 'badge-draft', error: 'badge-error' };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const LOG_NAMES = {
+  shopify_sync: 'Shopify product sync',
+  webami_sync: 'WebAMI order sync',
+  webami_resolve: 'WebAMI product fetch',
+  price_check: 'Price check',
+};
+const fmtDetails = d => (d || '').replace(/(\w+):(\d+)/g, '$2 $1').replace(/\s(?=\d+ )/g, ' · ');
+const fmtSecs = s => (s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${s}s`);
 
 const SYNCS = [
   { key: 'shopify', name: 'Shopify Sync', url: '/api/sync/shopify', unit: 'products', full: true,
-    meta: 'Pull products, variants, and variant images from Shopify' },
+    meta: 'Sync: pull products changed since the last sync. Full sync: re-download everything and remove products deleted in Shopify.' },
   { key: 'webami', name: 'WebAMI Sync', url: '/api/sync/webami', unit: 'orders',
-    meta: 'Pull new WebAMI orders and order items' },
+    meta: 'Sync: download new orders, then look up their products. Fetch products: look up items still unmatched. Re-fetch all: delete and rebuild every WebAMI product (slow).' },
   { key: 'webami-products', name: 'WebAMI Products', url: '/api/sync/webami-products',
     unit: 'order items', hidden: true },
   { key: 'prices', name: 'Price Check', url: '/api/sync/prices', unit: 'variants',
-    meta: 'Look up current WebAMI costs for every variant with a UPC' },
+    meta: 'Look up the current WebAMI cost for every variant with a UPC. Results show on the Prices page.' },
 ];
 
 export class DashboardPage {
@@ -224,8 +232,8 @@ export class DashboardPage {
         ? items.map(l => `
             <div class="log-item">
               <div>
-                <div class="log-title">${esc(l.action)}</div>
-                <div class="muted">${esc(l.details || '')} — ${Fmt.datetime(l.created_at)}</div>
+              <div class="log-title">${esc(LOG_NAMES[l.action] || l.action)}</div>
+              <div class="muted">${esc(fmtDetails(l.details))}${l.seconds != null ? ' · ' + fmtSecs(l.seconds) : ''} — ${Fmt.datetime(l.created_at)}</div>
               </div>
               <span class="badge ${LOG_BADGES[l.status] || 'badge-draft'}">${esc(l.status)}</span>
             </div>`).join('')

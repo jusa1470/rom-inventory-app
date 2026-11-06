@@ -24,9 +24,9 @@ VALUE_FILTERS: dict[str, str] = {"status": "status", "category": "category_name"
 LIST_FILTERS: dict[str, str] = {"genres": "genres", "tags": "tags"}
 
 _P_COLS = ("title", "vendor", "status", "product_type", "handle",
-           "category_id", "category_name", "type", "upc")
+           "category_id", "category_name", "type", "upc", "release_date")
 _V_COLS = ("title", "upc", "description", "release_date", "variant_tags",
-           "price", "cost", "inventory_quantity", "weight")
+           "price", "cost", "inventory_quantity", "weight", "barcode")
 
 
 def split_list(value: Optional[str]) -> list[str]:
@@ -88,6 +88,7 @@ def _save_variant(conn, product_id: str, v: dict) -> str:
         "variant_id": variant_id,
         "product_id": product_id,
         "title": v.get("title"),
+        "barcode": v.get("barcode", ""),
         "upc": norm_code(_mf(v, "upc")),
         "description": _mf(v, "description"),
         "release_date": _mf(v, "release_date"),
@@ -122,6 +123,7 @@ def save_shopify_product(p: dict) -> None:
             "genres": ",".join(split_list(_mf(p, "genres"))),
             "type": _mf(p, "type"),
             "upc": norm_code(_mf(p, "upc")),
+            "release_date": _mf(p, "release_date"),
         })
         conn.execute(
             "UPDATE shopify_products SET last_synced=datetime('now') WHERE product_id=?",
@@ -286,6 +288,22 @@ def update_local(product_id: str, product: dict, variants: list[dict]) -> None:
                     f"UPDATE shopify_variants SET {sets} WHERE variant_id=?",
                     [*cols.values(), v["id"]],
                 )
+
+
+def add_local_variants(product_id: str, variants: list[dict], created: list[dict]) -> None:
+    with transaction() as conn:
+        for v, c in zip(variants, created):
+            _upsert(conn, "shopify_variants", "variant_id", {
+                "variant_id": c["id"],
+                "product_id": product_id,
+                "inventory_item_id": c["inventory_item_id"],
+                "media_id": v.get("media_id"),
+                **{k: v[k] for k in _V_COLS if k in v},
+                "weight_unit": "POUNDS" if "weight" in v else None,
+            })
+        conn.execute(
+            "DELETE FROM shopify_variants WHERE product_id=? AND (title IS NULL OR title='Default Title')",
+            (product_id,))
 
 
 def delete_products_not_synced_since(ts: str) -> int:

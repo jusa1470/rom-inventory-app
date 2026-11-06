@@ -108,7 +108,8 @@ def _index() -> dict:
     idx: dict[str, list[dict]] = {}
     for w in rows(get_conn().execute(
             "SELECT id, title, artist, vendor, product_type, upc, sku, price, your_price, "
-            "href, wmsid, features, description FROM webami_products "
+            "href, wmsid, features, description, release_date, weight, weight_unit, image_url, genres "
+            "FROM webami_products "
             "WHERE upc IS NOT NULL AND upc != ''").fetchall()):
         for t in tokens(w["artist"]):
             idx.setdefault(t, []).append(w)
@@ -145,6 +146,37 @@ def _cache_key(q: str) -> tuple:
             c.execute("SELECT COUNT(*), MAX(last_synced) FROM shopify_products").fetchone()[:])
 
 
+def decorate_candidates(variant_id: str, cands: list[dict]) -> None:
+    """Add used_by (Shopify variants already holding this WebAMI product's UPCs) and orders."""
+    conn = get_conn()
+    for w in cands:
+        upcs = {w["upc"]}
+        if w.get("id"):
+            upcs |= {r[0] for r in conn.execute(
+                "SELECT value FROM webami_product_ids WHERE product_id=? AND kind='upc'",
+                (w["id"],))}
+        marks = ",".join("?" * len(upcs))
+        w["used_by"] = rows(conn.execute(
+            "SELECT p.title, v.title AS variant_title, v.variant_id FROM shopify_variants v "
+            f"JOIN shopify_products p ON p.product_id=v.product_id "
+            f"WHERE v.upc IN ({marks}) AND v.variant_id != ?",
+            [*upcs, variant_id or ""]).fetchall())
+        w["orders"] = rows(conn.execute(
+            "SELECT o.number, o.submitted_at, i.quantity FROM webami_order_items i "
+            "JOIN webami_orders o ON o.guid=i.order_guid WHERE i.product_id=? "
+            "ORDER BY o.submitted_at DESC LIMIT 3", (w["id"],)).fetchall()) if w.get("id") else []
+
+
+def _decorate_page(items: list[dict]) -> list[dict]:
+    conn = get_conn()
+    for p in items:
+        p["siblings"] = rows(conn.execute(
+            "SELECT title, upc, cost FROM shopify_variants WHERE product_id=? AND variant_id!=? "
+            "ORDER BY rowid", (p["product_id"], p["variant_id"])).fetchall())
+        decorate_candidates(p["variant_id"], p["suggestions"])
+    return items
+
+
 def list_unmatched_variants(page: int = 1, per_page: int = 25, q: str = "",
                             only_suggested: bool = False) -> dict:
     conn = get_conn()
@@ -158,7 +190,10 @@ def list_unmatched_variants(page: int = 1, per_page: int = 25, q: str = "",
         where += " AND (p.title LIKE ? OR p.vendor LIKE ? OR v.title LIKE ?)"
         params = [f"%{q}%"] * 3
     sel = ("SELECT p.product_id, p.title, p.vendor, p.type, p.product_type, "
-           "v.variant_id, v.title AS variant_title, v.cost "
+           "v.variant_id, v.title AS variant_title, v.cost, "
+           "COALESCE((SELECT i.url FROM shopify_images i WHERE i.product_id=p.product_id "
+           " AND i.media_id=v.media_id), (SELECT i.url FROM shopify_images i "
+           " WHERE i.product_id=p.product_id ORDER BY i.position LIMIT 1)) AS image_url "
            "FROM shopify_variants v JOIN shopify_products p ON p.product_id=v.product_id "
            f"WHERE {where} ORDER BY p.vendor COLLATE NOCASE, p.title COLLATE NOCASE, v.rowid")
     idx = _index()
@@ -179,13 +214,13 @@ def list_unmatched_variants(page: int = 1, per_page: int = 25, q: str = "",
                               if p["suggestions"]]
             _cache["key"] = key
         allp = _cache["data"]
-        return {"items": allp[(max(page, 1) - 1) * per_page:][:per_page], "total": len(allp)}
+        return {"items": _decorate_page(allp[(max(page, 1) - 1) * per_page:][:per_page]), "total": len(allp)}
     total = conn.execute(
         "SELECT COUNT(*) FROM shopify_variants v JOIN shopify_products p "
         f"ON p.product_id=v.product_id WHERE {where}", params).fetchone()[0]
     items = rows(conn.execute(
         f"{sel} LIMIT ? OFFSET ?", [*params, per_page, (max(page, 1) - 1) * per_page]).fetchall())
-    return {"items": [enrich(p) for p in items], "total": total}
+    return {"items": _decorate_page([enrich(p) for p in items]), "total": total}
 
 
 def drop_from_match_cache(variant_id: str) -> None:

@@ -38,6 +38,7 @@ MIGRATIONS: list[str] = [
         genres        TEXT,
         type          TEXT,
         upc           TEXT,
+        release_date  TEXT,
         last_synced   TEXT DEFAULT (datetime('now'))
     );
 
@@ -45,6 +46,7 @@ MIGRATIONS: list[str] = [
         variant_id          TEXT PRIMARY KEY,
         product_id          TEXT NOT NULL REFERENCES shopify_products(product_id) ON DELETE CASCADE,
         title               TEXT,
+        barcode             TEXT,
         upc                 TEXT,
         description         TEXT,
         release_date        TEXT,
@@ -73,6 +75,7 @@ MIGRATIONS: list[str] = [
         action     TEXT NOT NULL,
         status     TEXT NOT NULL,
         details    TEXT,
+        seconds    REAL,
         created_at TEXT DEFAULT (datetime('now'))
     );
     
@@ -105,6 +108,11 @@ MIGRATIONS: list[str] = [
         product_type TEXT,
         sku          TEXT,
         upc          TEXT,
+        release_date TEXT,
+        genres       TEXT,
+        weight       REAL,
+        weight_unit  TEXT,
+        image_url    TEXT,
         price        REAL,
         your_price   REAL,
         wmsid        TEXT,
@@ -162,12 +170,6 @@ MIGRATIONS: list[str] = [
           FROM shopify_variants WHERE upc IS NOT NULL AND upc != '';
     """,
 ]
-
-# when shopify UPCs move to variants add this:
-    # DROP VIEW shopify_upcs;
-    # CREATE VIEW shopify_upcs AS
-    #     SELECT upc, product_id, variant_id, 'variant' AS source
-    #       FROM shopify_variants WHERE upc IS NOT NULL AND upc != '';
 
 
 def init_db(conn: sqlite3.Connection) -> None:

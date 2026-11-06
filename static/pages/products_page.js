@@ -1,47 +1,83 @@
-import { API } from '../api.js';
-import { Modal } from '../components/modal.js';
-import { createMultiSelect } from '../components/multiselect.js';
-import { Toast } from '../components/toast.js';
-import { Fmt, buildPager, debounce, esc, statusBadge, thumb, truncCell } from '../util.js';
+import { API } from "../api.js";
+import { Modal } from "../components/modal.js";
+import { createMultiSelect } from "../components/multiselect.js";
+import { Toast } from "../components/toast.js";
+import {
+  Fmt,
+  buildPager,
+  debounce,
+  esc,
+  statusBadge,
+  thumb,
+  truncCell,
+  variantTitle,
+} from "../util.js";
 
-const UPC_LEVEL = 'product'; // switch to 'variant' once UPCs move to variants
+const UPC_LEVEL = "product"; // switch to 'variant' once UPCs move to variants
 
 // key = filter name (and filter-options key); sort = backend sort key
 const COLUMNS = [
-  { label: '', width: 58 },
-  { label: 'Title', width: 320, key: 'title', sort: 'title', filter: 'text' },
-  { label: 'Vendor', width: 160, key: 'vendor', sort: 'vendor', filter: 'text' },
-  { label: 'Status', width: 120, key: 'status', sort: 'status', filter: 'select' },
-  { label: 'Category', width: 200, key: 'category', sort: 'category', filter: 'select' },
-  { label: 'Type', width: 140, key: 'type', sort: 'type', filter: 'select' },
-  { label: 'Genres', width: 180, key: 'genres', sort: 'genres', filter: 'select' },
-  { label: 'Tags', width: 180, key: 'tags', sort: 'tags', filter: 'select' },
-  { label: 'Variants', width: 90, sort: 'variants', num: true },
-  { label: 'Price', width: 140, sort: 'price', num: true },
-  { label: 'Qty', width: 80, sort: 'qty', num: true },
-  { label: '', width: 100, clear: true },
+  { label: "", width: 58 },
+  { label: "Title", width: 320, key: "title", sort: "title", filter: "text" },
+  {
+    label: "Vendor",
+    width: 160,
+    key: "vendor",
+    sort: "vendor",
+    filter: "text",
+  },
+  {
+    label: "Status",
+    width: 120,
+    key: "status",
+    sort: "status",
+    filter: "select",
+  },
+  {
+    label: "Category",
+    width: 200,
+    key: "category",
+    sort: "category",
+    filter: "select",
+  },
+  { label: "Type", width: 140, key: "type", sort: "type", filter: "select" },
+  {
+    label: "Genres",
+    width: 180,
+    key: "genres",
+    sort: "genres",
+    filter: "select",
+  },
+  { label: "Tags", width: 180, key: "tags", sort: "tags", filter: "select" },
+  { label: "Variants", width: 90, sort: "variants", num: true },
+  { label: "Price", width: 140, sort: "price", num: true },
+  { label: "Qty", width: 80, sort: "qty", num: true },
+  { label: "", width: 100, clear: true },
 ];
 
 const TABLE_MIN_WIDTH = COLUMNS.reduce((n, c) => n + (c.width || 0), 0);
 
-const listText = v => (v ? String(v).split(',').join(', ') : '');
+const listText = (v) => (v ? String(v).split(",").join(", ") : "");
 
 function priceRange(variants) {
-  const prices = variants.map(v => parseFloat(v.price)).filter(n => !Number.isNaN(n));
-  if (!prices.length) return '—';
+  const prices = variants
+    .map((v) => parseFloat(v.price))
+    .filter((n) => !Number.isNaN(n));
+  if (!prices.length) return "—";
   const lo = Math.min(...prices);
   const hi = Math.max(...prices);
   return lo === hi ? Fmt.price(lo) : `${Fmt.price(lo)} – ${Fmt.price(hi)}`;
 }
 
-const totalQty = variants => variants.reduce((n, v) => n + (v.inventory_quantity || 0), 0);
+const totalQty = (variants) =>
+  variants.reduce((n, v) => n + (v.inventory_quantity || 0), 0);
 
 export class ProductsPage {
   constructor() {
     this.page = 1;
-    this.q = '';
-    this.sort = 'title';
-    this.dir = 'asc';
+    this.q = "";
+    this.sort = "title";
+    this.dir = "asc";
     this.filters = {};
     this._request = 0;
     this._selects = [];
@@ -49,7 +85,7 @@ export class ProductsPage {
   }
 
   destroy() {
-    this._selects.forEach(s => s.destroy());
+    this._selects.forEach((s) => s.destroy());
     this._selects = [];
   }
 
@@ -64,7 +100,7 @@ export class ProductsPage {
         <div id="pager-top"></div>
         <div class="table-wrap">
           <table style="min-width:${TABLE_MIN_WIDTH}px">
-            <colgroup>${COLUMNS.map(c => `<col${c.width ? ` style="width:${c.width}px"` : ''}>`).join('')}</colgroup>
+            <colgroup>${COLUMNS.map((c) => `<col${c.width ? ` style="width:${c.width}px"` : ""}>`).join("")}</colgroup>
             <thead id="products-head"></thead>
             <tbody id="products-body"></tbody>
           </table>
@@ -74,49 +110,57 @@ export class ProductsPage {
 
     let options = {};
     try {
-      options = await API.get('/api/products/filter-options');
+      options = await API.get("/api/products/filter-options");
     } catch (e) {
-      Toast.error('Failed to load filter options: ' + e.message);
+      Toast.error("Failed to load filter options: " + e.message);
     }
     this._buildHead(options);
 
-    this.c.querySelector('#p-search').addEventListener('input', debounce(e => {
-      this.q = e.target.value.trim();
-      this.page = 1;
-      this._load();
-    }));
+    this.c.querySelector("#p-search").addEventListener(
+      "input",
+      debounce((e) => {
+        this.q = e.target.value.trim();
+        this.page = 1;
+        this._load();
+      }),
+    );
     await this._load();
   }
 
   _buildHead(options) {
-    const labels = document.createElement('tr');
-    const filters = document.createElement('tr');
-    filters.className = 'filter-row';
+    const labels = document.createElement("tr");
+    const filters = document.createElement("tr");
+    filters.className = "filter-row";
 
-    COLUMNS.forEach(col => {
-      const th = document.createElement('th');
-      th.className = [col.num ? 'num' : '', col.sort ? 'sortable' : ''].join(' ').trim();
-      th.innerHTML = `${col.label}<span class="sort-ind" data-sort="${col.sort || ''}"></span>`;
-      if (col.sort) th.addEventListener('click', () => this._setSort(col.sort));
+    COLUMNS.forEach((col) => {
+      const th = document.createElement("th");
+      th.className = [col.num ? "num" : "", col.sort ? "sortable" : ""]
+        .join(" ")
+        .trim();
+      th.innerHTML = `${col.label}<span class="sort-ind" data-sort="${col.sort || ""}"></span>`;
+      if (col.sort) th.addEventListener("click", () => this._setSort(col.sort));
       labels.appendChild(th);
 
-      const fth = document.createElement('th');
-      if (col.filter === 'text') {
-        const input = document.createElement('input');
-        input.className = 'input filter-input';
-        input.placeholder = 'Filter…';
-        input.addEventListener('input', debounce(() => {
-          this.filters[col.key] = input.value.trim();
-          this.page = 1;
-          this._load();
-        }));
+      const fth = document.createElement("th");
+      if (col.filter === "text") {
+        const input = document.createElement("input");
+        input.className = "input filter-input";
+        input.placeholder = "Filter…";
+        input.addEventListener(
+          "input",
+          debounce(() => {
+            this.filters[col.key] = input.value.trim();
+            this.page = 1;
+            this._load();
+          }),
+        );
         this._textInputs.push(input);
         fth.appendChild(input);
-      } else if (col.filter === 'select') {
+      } else if (col.filter === "select") {
         const select = createMultiSelect({
-          placeholder: 'All',
+          placeholder: "All",
           options: options[col.key] || [],
-          onChange: values => {
+          onChange: (values) => {
             this.filters[col.key] = values;
             this.page = 1;
             this._load();
@@ -125,35 +169,37 @@ export class ProductsPage {
         this._selects.push(select);
         fth.appendChild(select.el);
       } else if (col.clear) {
-        const btn = document.createElement('button');
-        btn.className = 'btn btn-ghost btn-sm';
-        btn.textContent = 'Clear all';
-        btn.addEventListener('click', () => this._clearFilters());
+        const btn = document.createElement("button");
+        btn.className = "btn btn-ghost btn-sm";
+        btn.textContent = "Clear all";
+        btn.addEventListener("click", () => this._clearFilters());
         fth.appendChild(btn);
       }
       filters.appendChild(fth);
     });
 
-    this.c.querySelector('#products-head').replaceChildren(labels, filters);
+    this.c.querySelector("#products-head").replaceChildren(labels, filters);
     this._updateSortIndicators();
   }
 
   _clearFilters() {
-    this.q = '';
+    this.q = "";
     this.filters = {};
     this.page = 1;
-    this.c.querySelector('#p-search').value = '';
-    this._textInputs.forEach(i => { i.value = ''; });
-    this._selects.forEach(s => s.clear());
+    this.c.querySelector("#p-search").value = "";
+    this._textInputs.forEach((i) => {
+      i.value = "";
+    });
+    this._selects.forEach((s) => s.clear());
     this._load();
   }
 
   _setSort(key) {
     if (this.sort === key) {
-      this.dir = this.dir === 'asc' ? 'desc' : 'asc';
+      this.dir = this.dir === "asc" ? "desc" : "asc";
     } else {
       this.sort = key;
-      this.dir = 'asc';
+      this.dir = "asc";
     }
     this.page = 1;
     this._updateSortIndicators();
@@ -161,33 +207,35 @@ export class ProductsPage {
   }
 
   _updateSortIndicators() {
-    this.c.querySelectorAll('.sort-ind').forEach(span => {
-      span.textContent = span.dataset.sort === this.sort
-        ? (this.dir === 'asc' ? '▲' : '▼') : '';
+    this.c.querySelectorAll(".sort-ind").forEach((span) => {
+      span.textContent =
+        span.dataset.sort === this.sort ? (this.dir === "asc" ? "▲" : "▼") : "";
     });
   }
 
   _params() {
     const params = new URLSearchParams({
-      page: String(this.page), sort: this.sort, dir: this.dir,
+      page: String(this.page),
+      sort: this.sort,
+      dir: this.dir,
     });
-    if (this.q) params.set('q', this.q);
+    if (this.q) params.set("q", this.q);
     for (const [key, value] of Object.entries(this.filters)) {
-      if (Array.isArray(value)) value.forEach(v => params.append(key, v));
+      if (Array.isArray(value)) value.forEach((v) => params.append(key, v));
       else if (value) params.set(key, value);
     }
     return params;
   }
 
   async _load() {
-    const body = this.c.querySelector('#products-body');
+    const body = this.c.querySelector("#products-body");
     const request = ++this._request;
     try {
       const data = await API.get(`/api/products?${this._params()}`);
       if (request !== this._request || !body.isConnected) return;
       this._renderRows(body, data.items);
-      for (const id of ['#pager-top', '#pager-bottom']) {
-        buildPager(this.c.querySelector(id), data, p => {
+      for (const id of ["#pager-top", "#pager-bottom"]) {
+        buildPager(this.c.querySelector(id), data, (p) => {
           this.page = p;
           this._load();
         });
@@ -203,7 +251,9 @@ export class ProductsPage {
       body.innerHTML = `<tr><td colspan="${COLUMNS.length}" class="empty-cell">No products found</td></tr>`;
       return;
     }
-    body.innerHTML = items.map(p => `
+    body.innerHTML = items
+      .map(
+        (p) => `
       <tr>
         <td>${thumb(p.image_url, p.title)}</td>
         <td>${truncCell(p.title)}</td>
@@ -217,9 +267,14 @@ export class ProductsPage {
         <td class="num">${priceRange(p.variants)}</td>
         <td class="num">${totalQty(p.variants)}</td>
         <td><button class="btn btn-ghost btn-sm" data-id="${esc(p.product_id)}">View</button></td>
-      </tr>`).join('');
-    body.querySelectorAll('button[data-id]').forEach(btn =>
-      btn.addEventListener('click', () => this._openDetail(btn.dataset.id)));
+      </tr>`,
+      )
+      .join("");
+    body
+      .querySelectorAll("button[data-id]")
+      .forEach((btn) =>
+        btn.addEventListener("click", () => this._openDetail(btn.dataset.id)),
+      );
   }
 
   async _openDetail(productId) {
@@ -234,28 +289,31 @@ export class ProductsPage {
     const item = (label, value) => `
       <div>
         <div class="input-label">${label}</div>
-        <div class="detail-value">${esc(value || '—')}</div>
+        <div class="detail-value">${esc(value || "—")}</div>
       </div>`;
 
-    const body = document.createElement('div');
+    const body = document.createElement("div");
     body.innerHTML = `
       <div class="detail-grid">
-        ${item('Vendor', p.vendor)}
-        ${item('Handle', p.handle)}
-        ${item('Status', p.status)}
-        ${item('Category', p.category_name)}
-        ${item('Product type', p.product_type)}
-        ${item('Genres', listText(p.genres))}
-        ${item('Type', p.type)}
-        ${item('UPC', p.upc)}
-        ${item('Tags', listText(p.tags))}
-        ${item('Last synced', Fmt.datetime(p.last_synced))}
+        ${item("Vendor", p.vendor)}
+        ${item("Handle", p.handle)}
+        ${item("Status", p.status)}
+        ${item("Category", p.category_name)}
+        ${item("Product type", p.product_type)}
+        ${item("Genres", listText(p.genres))}
+        ${item("Type", p.type)}
+        ${item("UPC", p.upc)}
+        ${item("Tags", listText(p.tags))}
+        ${item("Last synced", Fmt.datetime(p.last_synced))}
       </div>
-      ${p.images.length ? `
+      ${p.images.length
+        ? `
         <div class="section-label">Product images (${p.images.length})</div>
         <div class="image-strip">
-          ${p.images.map(img => `<img src="${esc(img.url)}" alt="${esc(p.title)}">`).join('')}
-        </div>` : ''}
+          ${p.images.map((img) => `<img src="${esc(img.url)}" alt="${esc(p.title)}">`).join("")}
+        </div>`
+        : ""
+      }
       <div class="section-label">Variants (${p.variants.length})</div>
       <div class="table-wrap">
         <table class="variants-table">
@@ -265,7 +323,9 @@ export class ProductsPage {
             <th>Weight</th><th>Release date</th><th>Variant tags</th><th>Description</th>
           </tr></thead>
           <tbody>
-            ${p.variants.map(v => `
+            ${p.variants
+        .map(
+          (v) => `
               <tr>
                 <td>${thumb(v.image_url, v.title)}</td>
                 <td>${truncCell(v.title)}</td>
@@ -273,11 +333,13 @@ export class ProductsPage {
                 <td class="num">${Fmt.price(v.price)}</td>
                 <td class="num">${Fmt.price(v.cost)}</td>
                 <td class="num">${Fmt.qty(v.inventory_quantity)}</td>
-                <td>${v.weight != null ? esc(`${v.weight} ${v.weight_unit || ''}`) : '—'}</td>
-                <td>${esc(v.release_date || '—')}</td>
+                <td>${v.weight != null ? esc(`${v.weight} ${v.weight_unit || ""}`) : "—"}</td>
+                <td>${esc(v.release_date || "—")}</td>
                 <td>${truncCell(listText(v.variant_tags))}</td>
                 <td>${truncCell(v.description)}</td>
-              </tr>`).join('')}
+              </tr>`,
+        )
+        .join("")}
           </tbody>
         </table>
       </div>`;
@@ -285,20 +347,26 @@ export class ProductsPage {
     Modal.open({
       title: p.title,
       body,
-      width: '96vw',
+      width: "96vw",
       buttons: [
-        { label: 'Edit', cls: 'btn-primary', onClick: () => this._openEdit(p) },
-        { label: 'Match WebAMI', onClick: () => this._openMatch(p) },
-        { label: 'Close', onClick: Modal.close },
+        { label: "Edit", cls: "btn-primary", onClick: () => this._openEdit(p) },
+        { label: "Match WebAMI", onClick: () => this._openMatch(p) },
+        { label: "Close", onClick: Modal.close },
       ],
     });
   }
 
   _openEdit(p) {
-    const LB = { POUNDS: 1, OUNCES: 1 / 16, KILOGRAMS: 2.20462, GRAMS: 1 / 453.592 };
-    const lbs = v => (v.weight == null ? '' : +(v.weight * (LB[v.weight_unit] ?? 1)).toFixed(4));
+    const LB = {
+      POUNDS: 1,
+      OUNCES: 1 / 16,
+      KILOGRAMS: 2.20462,
+      GRAMS: 1 / 453.592,
+    };
+    const lbs = (v) =>
+      v.weight == null ? "" : +(v.weight * (LB[v.weight_unit] ?? 1)).toFixed(4);
     const inp = (name, label, val) => {
-      const s = String(val ?? '');
+      const s = String(val ?? "");
       return `
         <div class="input-group">
           <label class="input-label">${label}</label>
@@ -306,78 +374,118 @@ export class ProductsPage {
         </div>`;
     };
     const PF = [
-      ['title', 'Title', p.title], ['vendor', 'Vendor', p.vendor],
-      ['product_type', 'Product type', p.product_type], ['handle', 'Handle', p.handle],
-      ['category', 'Category (name)', p.category_name], ['type', 'Type', p.type],
-      ['upc', 'UPC', p.upc], ['genres', 'Genres (comma separated)', listText(p.genres)],
-      ['tags', 'Tags (comma separated)', listText(p.tags)],
+      ["title", "Title", p.title],
+      ["vendor", "Vendor", p.vendor],
+      ["product_type", "Product type", p.product_type],
+      ["handle", "Handle", p.handle],
+      ["category", "Category (name)", p.category_name],
+      ["type", "Type", p.type],
+      ["upc", "UPC", p.upc],
+      ['release_date', 'Release date', p.release_date],
+      ["genres", "Genres (comma separated)", listText(p.genres)],
+      ["tags", "Tags (comma separated)", listText(p.tags)],
     ];
-    const VF = v => [
+    const VF = (v) => [
       ...(() => {
-        const [e, c, a] = (v.title || '').split(' | ');
-        return [['edition', 'Edition', e || 'Standard'], ['color', 'Color', c || ''],
-                ['attributes', 'Attributes', a || '']];
+        const [e, c, a] = (v.title || "").split(" | ");
+        return [
+          ["edition", "Edition", e || "Standard"],
+          ["color", "Color", c || ""],
+          ["attributes", "Attributes", a || ""],
+        ];
       })(),
-      ['upc', 'UPC', v.upc],
-      ['description', 'Description', v.description],
-      ['release_date', 'Release date', v.release_date],
-      ['variant_tags', 'Variant tags', v.variant_tags], ['price', 'Price', v.price],
-      ['cost', 'Cost', v.cost], ['inventory_quantity', 'Qty', v.inventory_quantity],
-      ['weight', 'Weight (lbs)', lbs(v)],
+      ["upc", "UPC", v.upc],
+      ["description", "Description", v.description],
+      ["release_date", "Release date", v.release_date],
+      ["variant_tags", "Variant tags", v.variant_tags],
+      ["price", "Price", v.price],
+      ["cost", "Cost", v.cost],
+      ["inventory_quantity", "Qty", v.inventory_quantity],
+      ["weight", "Weight (lbs)", lbs(v)],
     ];
 
-    const body = document.createElement('div');
+    const needNew = p.variants.every(
+      (v) => !v.title || v.title === "Default Title",
+    );
+    const body = document.createElement("div");
     body.innerHTML = `
       <div class="form-grid" id="edit-product">
-        ${PF.map(f => inp(...f)).join('')}
+        ${PF.map((f) => inp(...f)).join("")}
         <div class="input-group">
           <label class="input-label">Status</label>
           <select class="input" name="status" data-orig="${esc(p.status)}">
-            ${['ACTIVE', 'DRAFT', 'ARCHIVED'].map(s =>
-              `<option ${s === p.status ? 'selected' : ''}>${s}</option>`).join('')}
+            ${["ACTIVE", "DRAFT", "ARCHIVED"]
+        .map(
+          (s) =>
+            `<option ${s === p.status ? "selected" : ""}>${s}</option>`,
+        )
+        .join("")}
           </select>
         </div>
       </div>
-      <div class="section-label">Variants</div>
-      ${p.variants.map(v => `
-        <div class="form-grid" data-vid="${esc(v.variant_id)}" data-iid="${esc(v.inventory_item_id)}"
+      <div class="section-label">Variants ${needNew ? '<button type="button" class="btn btn-ghost btn-sm" id="autofill">Auto-fill from WebAMI</button>' : ""}</div>
+      ${(needNew ? [{}] : p.variants)
+        .map(
+          (v) => `
+        <div class="form-grid" data-vid="${esc(v.variant_id)}" data-iid="${esc(v.inventory_item_id)}" data-mid="${esc(v.media_id)}" data-barcode="${esc(v.barcode)}"
              style="margin-bottom:16px">
-          ${VF(v).map(f => inp(...f)).join('')}
-        </div>`).join('')}`;
+          ${VF(v)
+              .map((f) => inp(...f))
+              .join("")}
+        </div>`,
+        )
+        .join("")}`;
 
-    const changed = root => {
+    const changed = (root) => {
       const out = {};
-      root.querySelectorAll('[name]').forEach(i => {
+      root.querySelectorAll("[name]").forEach((i) => {
         const val = i.value.trim();
         if (val !== i.dataset.orig) out[i.name] = val;
       });
       return out;
     };
 
-    const save = async () => {
+    const save = async btn => {
       const product = changed(body.querySelector('#edit-product'));
-      ['tags', 'genres'].forEach(k => {
-        if (k in product) product[k] = product[k].split(',').map(s => s.trim()).filter(Boolean);
+      ["tags", "genres"].forEach((k) => {
+        if (k in product)
+          product[k] = product[k]
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
       });
-      const variants = [...body.querySelectorAll('[data-vid]')].map(r => {
-        const f = changed(r);
-        if (!Object.keys(f).length) return null;
-        if ('edition' in f || 'color' in f || 'attributes' in f) {
-          const g = n => r.querySelector(`[name="${n}"]`).value.trim();
-          f.title = variantTitle(g('edition'), g('color'), g('attributes'));
-        }
-        delete f.edition; delete f.color; delete f.attributes;
-        if ('inventory_quantity' in f) {
-          f.inventory_quantity = parseInt(String(f.inventory_quantity), 10);
-        }
-        if ('weight' in f) f.weight = parseFloat(String(f.weight));
-        return {
-          id: r.getAttribute('data-vid') ?? '',
-          ...f,
-          ...('inventory_quantity' in f ? { inventory_item_id: r.getAttribute('data-iid') ?? '' } : {}),
-        };
-      }).filter(Boolean);
-      if (!Object.keys(product).length && !variants.length) return Modal.close();
+      const variants = [...body.querySelectorAll("[data-vid]")]
+        .map((r) => {
+          const f = changed(r);
+          if (!Object.keys(f).length) return null;
+          if ("edition" in f || "color" in f || "attributes" in f) {
+            const g = (n) => r.querySelector(`[name="${n}"]`).value.trim();
+            f.title = variantTitle(g("edition"), g("color"), g("attributes"));
+          }
+          delete f.edition;
+          delete f.color;
+          delete f.attributes;
+          if ("inventory_quantity" in f) {
+            f.inventory_quantity = parseInt(String(f.inventory_quantity), 10);
+          }
+          if ("weight" in f) f.weight = parseFloat(String(f.weight));
+          return {
+            id: r.getAttribute("data-vid") ?? "",
+            ...f,
+            ...("inventory_quantity" in f
+              ? { inventory_item_id: r.getAttribute("data-iid") ?? "" }
+              : {}),
+              ...(!r.getAttribute('data-vid') && r.dataset.mid ? { media_id: r.dataset.mid } : {}),
+              ...(!r.getAttribute('data-vid') && r.dataset.barcode ? { barcode: r.dataset.barcode } : {}),
+          };
+        })
+        .filter(Boolean);
+      if (variants.some(v => !v.id)) { product.upc = ''; product.release_date = ''; }
+      if (!Object.keys(product).length && !variants.length)
+        return Modal.close();
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Saving…';
       try {
         const res = await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
         Modal.close();
@@ -385,48 +493,108 @@ export class ProductsPage {
         this._load();
       } catch (e) {
         Toast.error(e.message);
+        btn.disabled = false;
+        btn.textContent = label;
       }
     };
+
+    const autofill = async () => {
+      try {
+        const { items } = await API.get(
+          `/api/products/${encodeURIComponent(p.product_id)}/webami-suggestions`,
+        );
+        const c = items[0];
+        if (!c) return Toast.info("No suggestion");
+        const s = c.suggested;
+        const row = body.querySelector('[data-vid=""]');
+        const set = (n, val) => {
+          const i = row.querySelector(`[name="${n}"]`);
+          if (i && val != null && val !== "" && val !== "None") i.value = val;
+        };
+        set("edition", s.edition);
+        set("color", s.color);
+        set("attributes", s.attributes);
+        set("upc", c.upc || p.upc);
+        set("description", c.description);
+        set("release_date", c.release_date);
+        const old = p.variants[0];
+        if (old) set('inventory_quantity', old.inventory_quantity);
+        row.dataset.mid = old?.media_id || p.images?.[0]?.media_id || '';
+        row.dataset.barcode = old?.barcode || '';
+        const LBS = { lb: 1, lbs: 1, oz: 1 / 16, kg: 2.20462, g: 1 / 453.592 };
+        const wl =
+          c.weight != null
+            ? +(c.weight * (LBS[c.weight_unit] ?? 1)).toFixed(4)
+            : null;
+        set("weight", wl ?? 0.0);
+        const t = body.querySelector('#edit-product [name="title"]');
+        if (s.title && t) t.value = s.title;
+        const pf = n => body.querySelector(`#edit-product [name="${n}"]`);
+        if (c.genres && !pf('genres').value.trim()) pf('genres').value = c.genres.split(',').join(', ');
+        const slug = x => String(x || '').toLowerCase().replace(/&/g, ' and ')
+          .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const h = [pf('vendor').value, pf('title').value, pf('type').value || pf('product_type').value]
+          .map(slug).filter(Boolean).join('-');
+        if (h) pf('handle').value = h;
+        if (c.price != null) {
+          set("cost", c.price.toFixed(2));
+          set("price", (c.price / 0.66).toFixed(2));
+        }
+      } catch (e) {
+        Toast.error(e.message);
+      }
+    };
+    const afBtn = body.querySelector("#autofill");
+    if (afBtn) afBtn.addEventListener("click", autofill);
 
     Modal.open({
       title: `Edit: ${p.title}`,
       body,
-      width: '96vw',
+      width: "96vw",
       buttons: [
-        { label: 'Save', cls: 'btn-primary', onClick: save },
-        { label: 'Cancel', onClick: Modal.close },
+        { label: "Save", cls: "btn-primary", onClick: save },
+        { label: "Cancel", onClick: Modal.close },
       ],
     });
+
+    if (afBtn) autofill();
   }
 
   async _openMatch(p, search = false) {
     let items;
     try {
       ({ items } = await API.get(
-        `/api/products/${encodeURIComponent(p.product_id)}/webami-suggestions?search=${search}`));
+        `/api/products/${encodeURIComponent(p.product_id)}/webami-suggestions?search=${search}`,
+      ));
     } catch (e) {
       Toast.error(e.message);
       return;
     }
-    const body = document.createElement('div');
+    const body = document.createElement("div");
     body.innerHTML = `
-      <div class="muted">Current UPC: ${esc(p.upc || '—')} · Vendor: ${esc(p.vendor || '—')}</div>
+      <div class="muted">Current UPC: ${esc(p.upc || "—")} · Vendor: ${esc(p.vendor || "—")}</div>
       <div class="table-wrap" style="margin-top:12px">
         <table class="variants-table">
           <thead><tr><th></th><th>Source</th><th>Title</th><th>Artist</th><th>Format</th>
             <th>UPC</th><th class="num">Price</th></tr></thead>
           <tbody>
-            ${items.length ? items.map((c, i) => `
+            ${items.length
+        ? items
+          .map(
+            (c, i) => `
               <tr>
-                <td><input type="radio" name="cand" value="${i}" ${i === 0 ? 'checked' : ''}></td>
-                <td>${esc(c.source)}${c.artist_match ? '' : ' (artist differs)'}</td>
+                <td><input type="radio" name="cand" value="${i}" ${i === 0 ? "checked" : ""}></td>
+                <td>${esc(c.source)}${c.artist_match ? "" : " (artist differs)"}</td>
                 <td>${truncCell(c.title)}</td>
                 <td>${truncCell(c.artist)}</td>
-                <td>${esc(c.product_type || '—')}</td>
+                <td>${esc(c.product_type || "—")}</td>
                 <td class="mono">${esc(c.upc)}</td>
-                <td class="num">${c.price != null ? Fmt.price(c.price) : '—'}</td>
-              </tr>`).join('')
-              : '<tr><td colspan="7" class="empty-cell">No matches</td></tr>'}
+                <td class="num">${c.price != null ? Fmt.price(c.price) : "—"}</td>
+              </tr>`,
+          )
+          .join("")
+        : '<tr><td colspan="7" class="empty-cell">No matches</td></tr>'
+      }
           </tbody>
         </table>
       </div>
@@ -435,26 +603,38 @@ export class ProductsPage {
           <input type="checkbox" name="upd_title"><span>Update title</span></label>
         <input class="input" name="title" value="${esc(items[0]?.suggested_title || p.title)}">
       </div>`;
-    const titleInput = body.querySelector('[name=title]');
-    body.querySelectorAll('[name=cand]').forEach(r =>
-      r.addEventListener('change', () => { titleInput.value = items[+r.value].suggested_title; }));
+    const titleInput = body.querySelector("[name=title]");
+    body.querySelectorAll("[name=cand]").forEach((r) =>
+      r.addEventListener("change", () => {
+        titleInput.value = items[+r.value].suggested_title;
+      }),
+    );
 
     const save = async () => {
-      const sel = body.querySelector('[name=cand]:checked');
+      const sel = body.querySelector("[name=cand]:checked");
       if (!sel) return;
       const c = items[+sel.value];
       const product = {};
       const variants = [];
-      if (UPC_LEVEL === 'product') product.upc = c.upc;
+      if (UPC_LEVEL === "product") product.upc = c.upc;
       else variants.push({ id: p.variants[0].variant_id, upc: c.upc });
       const title = titleInput.value.trim();
-      if (body.querySelector('[name=upd_title]').checked && title && title !== p.title) {
+      if (
+        body.querySelector("[name=upd_title]").checked &&
+        title &&
+        title !== p.title
+      ) {
         product.title = title;
       }
       try {
-        const res = await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
+        const res = await API.put(
+          `/api/products/${encodeURIComponent(p.product_id)}`,
+          { product, variants },
+        );
         Modal.close();
-        res.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('UPC saved to Shopify');
+        res.dry_run
+          ? Toast.warning("Test mode: nothing written")
+          : Toast.success("UPC saved to Shopify");
         this._load();
       } catch (e) {
         Toast.error(e.message);
@@ -464,11 +644,11 @@ export class ProductsPage {
     Modal.open({
       title: `Match WebAMI: ${p.title}`,
       body,
-      width: '96vw',
+      width: "96vw",
       buttons: [
-        { label: 'Confirm match', cls: 'btn-primary', onClick: save },
-        { label: 'Search WebAMI', onClick: () => this._openMatch(p, true) },
-        { label: 'Cancel', onClick: Modal.close },
+        { label: "Confirm match", cls: "btn-primary", onClick: save },
+        { label: "Search WebAMI", onClick: () => this._openMatch(p, true) },
+        { label: "Cancel", onClick: Modal.close },
       ],
     });
   }

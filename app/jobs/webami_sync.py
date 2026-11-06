@@ -35,6 +35,11 @@ def _resolve(client: WebamiClient, job_id: str) -> int:
         return p if p and p.get("title") else None
 
     def fetch(i):
+        if i["upc"]:
+            href = f"/{i['upc']}"
+            page = _page(href)
+            if page:
+                return page, href
         page = _page(i["href"])
         if page:
             return page, i["href"]

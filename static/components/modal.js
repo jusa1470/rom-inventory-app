@@ -31,7 +31,7 @@ function open({ title = '', body, buttons = [], width = '520px' }) {
     const btn = document.createElement('button');
     btn.className = `btn ${cls}`;
     btn.textContent = label;
-    btn.addEventListener('click', () => { if (onClick) onClick(); });
+    btn.addEventListener('click', () => { if (onClick) onClick(btn); });
     footerEl.appendChild(btn);
   });
   document.body.appendChild(overlay);

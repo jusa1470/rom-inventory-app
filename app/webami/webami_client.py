@@ -33,6 +33,11 @@ def _money(s: str):
         return None
 
 
+def _weight(s):
+    m = re.search(r"([\d.]+)\s*(lbs?|oz|kg|g)\b", s or "", re.I)
+    return (float(m.group(1)), m.group(2).lower()) if m else (None, None)
+
+
 def parse_order_list(page: str) -> list[dict]:
     soup = BeautifulSoup(page, "lxml")
     out = []
@@ -90,6 +95,20 @@ def _info(soup, label):
     return None
 
 
+def _genres(soup):
+    for li in soup.select("#product-primaryinfo li"):
+        sp = li.find("span")
+        if sp and sp.get_text(strip=True).rstrip(":").lower() == "genre":
+            skip = {"box sets", "enhanced cd", "misc product"}
+            out = {}
+            for a in li.find_all("a"):
+                g = a.get_text(strip=True)
+                if g and g.lower() not in skip:
+                    out.setdefault(g.lower(), g)
+            return ",".join(out.values()) or None
+    return None
+
+
 def _val(page, id_):
     m = re.search(rf'<input[^>]*id="{id_}"[^>]*value="([^"]*)"', page)
     return html.unescape(m.group(1)) if m else None
@@ -132,6 +151,12 @@ def parse_product(page: str) -> dict:
         "your_price": None,
         "wmsid": _val(page, "wmsid"),
         "description": _description(page),
+        "release_date": _info(soup, "Release Date"),
+        "genres": _genres(soup),
+        "weight": _weight(_info(soup, "Weight"))[0],
+        "weight_unit": _weight(_info(soup, "Weight"))[1],
+        "image_url": ((soup.select_one(".main-cover img") or {}).get("src")
+                      or (ld.get("image") or [None])[0]),
     }
 
 

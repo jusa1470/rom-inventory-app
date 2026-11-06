@@ -43,7 +43,7 @@ def vars_from_cfg(
 
 VARIANT_FIELDS: str = """
 fragment VariantFields on ProductVariant {
-  	id title price taxable inventoryQuantity
+  	id title price taxable inventoryQuantity barcode
   	upc: metafield(namespace: $upcNamespace, key: $upcKey) { value }
   	description: metafield(namespace: $descriptionNamespace, key: $descriptionKey) { value }
   	release_date: metafield(namespace: $releaseDateNamespace, key: $releaseDateKey) { value }
@@ -121,6 +121,7 @@ query BulkStatus($id: ID!) {
 BULK_PRODUCT_MF: list[tuple[str, str, str]] = [
     ("genres", "shopify_genres_ns", "shopify_genres_key"),
     ("type", "shopify_type_ns", "shopify_type_key"),
+    ("release_date", "shopify_release_date_ns", "shopify_release_date_key"),
     ("upc", "shopify_upc_ns", "shopify_upc_key")
 ]
 BULK_VARIANT_MF: list[tuple[str, str, str]] = [
@@ -155,7 +156,7 @@ def bulk_products_query(cfg: dict, search: str | None = None) -> str:
       {product_mf}
       media {{ edges {{ node {{ id preview {{ image {{ url }} }} }} }} }}
       variants {{ edges {{ node {{
-        id title price taxable inventoryQuantity
+        id title price taxable inventoryQuantity barcode
         {variant_mf}
         media {{ edges {{ node {{ id }} }} }}
         inventoryItem {{
@@ -187,6 +188,30 @@ mutation VariantsUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!
 }
 """
 
+M_VARIANTS_CREATE: str = """
+mutation VariantsCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+  productVariantsBulkCreate(productId: $productId, variants: $variants,
+                            strategy: REMOVE_STANDALONE_VARIANT) {
+    productVariants { id inventoryItem { id } }
+    userErrors { field message }
+  }
+}
+"""
+
+M_METAFIELDS_DELETE: str = """
+mutation DelMf($metafields: [MetafieldIdentifierInput!]!) {
+  metafieldsDelete(metafields: $metafields) { userErrors { field message } }
+}
+"""
+
+M_VARIANT_MEDIA: str = """
+mutation VariantMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+  productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+    userErrors { field message }
+  }
+}
+"""
+
 M_INVENTORY_SET: str = """
 mutation SetQty($input: InventorySetQuantitiesInput!) {
   inventorySetQuantities(input: $input) { userErrors { field message } }
@@ -199,4 +224,12 @@ query($search: String!) {
 }
 """
 
-Q_PRODUCT_OPTIONS: str = "query($id: ID!) { product(id: $id) { options { name } } }"
+Q_PRODUCT_OPTIONS: str = "query($id: ID!) { product(id: $id) { options { id name } } }"
+
+M_OPTION_UPDATE: str = """
+mutation OptionUpdate($productId: ID!, $option: OptionUpdateInput!) {
+  productOptionUpdate(productId: $productId, option: $option) {
+    userErrors { field message }
+  }
+}
+"""

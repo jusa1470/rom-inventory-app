@@ -8,6 +8,8 @@ import threading
 import uuid
 from typing import Any, Callable
 
+from app.db.sync_log import start_timer
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 _jobs: dict[str, dict[str, Any]] = {}
@@ -46,6 +48,7 @@ def start(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> str:
     job_id = create(name)
 
     def _run() -> None:
+        start_timer()
         try:
             result = fn(job_id, *args, **kwargs)
             if is_cancelled(job_id):
