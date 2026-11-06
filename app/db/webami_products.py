@@ -3,6 +3,7 @@ from difflib import SequenceMatcher
 import logging
 
 from app import config
+from app.db.artists import alias_for, alias_map, canon, key
 from app.db.connection import get_conn, rows, transaction
 from app.webami.webami_classify import kw_eval, suggest_parts
 from app.webami.webami_helper import (
@@ -119,21 +120,25 @@ def _index() -> dict:
 def suggest_local(p: dict, idx: dict | None = None) -> list[dict]:
     idx = _index() if idx is None else idx
     stype = p.get("type") or p.get("product_type")
+    amap = alias_map()
+    pv = canon(p["vendor"], amap)
     seen, out = set(), []
     for t in tokens(p["vendor"]):
         for w in idx.get(t, []):
             if w["id"] in seen:
                 continue
             seen.add(w["id"])
+            wa = canon(w["artist"], amap)
             if format_ok(stype, w["product_type"]) and good_match(
-                    p["title"], p["vendor"], w["title"], w["artist"]):
+                    p["title"], pv, w["title"], wa):
                 missing, extra = kw_eval(p, w)
                 if missing:
                     continue
                 out.append({**w, "kw_extra": extra,
                             "tier": 1 if w["wmsid"] else 3,
                             "source": "orders" if w["wmsid"] else "order line only",
-                            "artist_match": True})
+                            "artist_match": key(pv) == key(wa),
+                            "canon_artist": alias_for(w["artist"], amap)})
     return out
 
 
@@ -143,7 +148,8 @@ def _cache_key(q: str) -> tuple:
     c = get_conn()
     return ("variants", q,
             c.execute("SELECT COUNT(*), MAX(last_synced) FROM webami_products").fetchone()[:],
-            c.execute("SELECT COUNT(*), MAX(last_synced) FROM shopify_products").fetchone()[:])
+            c.execute("SELECT COUNT(*), MAX(last_synced) FROM shopify_products").fetchone()[:],
+            c.execute("SELECT COUNT(*), MAX(rowid) FROM artist_aliases").fetchone()[:])
 
 
 def decorate_candidates(variant_id: str, cands: list[dict]) -> None:

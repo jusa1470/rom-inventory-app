@@ -150,6 +150,16 @@ MIGRATIONS: list[str] = [
         variant_id TEXT PRIMARY KEY,
         new_price  REAL NOT NULL
     );
+    CREATE TABLE artist_aliases (
+        alias_norm TEXT PRIMARY KEY,
+        alias      TEXT NOT NULL,
+        canonical  TEXT NOT NULL
+    );
+    CREATE TABLE mismatch_ignored (
+        vendor_key TEXT NOT NULL,
+        artist_key TEXT NOT NULL,
+        PRIMARY KEY (vendor_key, artist_key)
+    );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);
     CREATE INDEX IF NOT EXISTS idx_products_upc         ON shopify_products(upc);

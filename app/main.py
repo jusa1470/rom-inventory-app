@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 
 from app import auth, db
-from app.routes import matches_api, prices_api, products_api, settings_api, shopify_oauth_api, sync_api, orders_api
+from app.routes import artists_api, matches_api, prices_api, products_api, settings_api, shopify_oauth_api, sync_api, orders_api
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 logging.basicConfig(
@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(artists_api.router)
 app.include_router(auth.router)
 app.include_router(matches_api.router)
 app.include_router(orders_api.router)

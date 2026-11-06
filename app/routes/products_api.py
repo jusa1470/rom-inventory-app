@@ -202,6 +202,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
                               "weight_unit": page.get("weight_unit"),
                               "product_type": page.get("product_type") or r["format"],
                               "upc": r["upc"], "price": page.get("price"),
+                              "canon_artist": db.alias_for(page.get("artist") or r["artist"]),
                               "tier": 2, "source": "search (page verified)",
                               "kw_extra": extra,
                               "artist_match": (page.get("artist") or r["artist"]).lower()

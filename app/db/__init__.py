@@ -1,4 +1,8 @@
 from app.db.app_config import get_config, is_dry_run, upsert_config
+from app.db.artists import (
+    add_alias, alias_for, alias_map, canon, list_aliases, mismatches, 
+    remove_alias, set_ignored, vendor_changes
+)
 from app.db.connection import get_conn, transaction
 from app.db.prices import (
     get_price_variants, save_price_check, resolve_price_check, list_price_changes,
@@ -11,7 +15,10 @@ from app.db.shopify_products import (
     add_local_variants, add_local_product, delete_local_product, delete_local_variant
 )
 from app.db.sync_log import get_sync_log, log_sync
-from app.db.webami_orders import get_known_order_guids, get_webami_order, list_webami_orders, save_order, get_webami_stats, get_incomplete_order_guids
+from app.db.webami_orders import (
+    get_known_order_guids, get_webami_order, list_webami_orders, save_order, get_webami_stats, 
+    get_incomplete_order_guids
+)
 from app.db.webami_products import (
     get_unresolved_items, save_webami_product, get_webami_product_by_id, ignore_product,
     list_unmatched_variants, good_match, reset_webami_products,
@@ -28,6 +35,9 @@ __all__: list[str] = [
     "init_db",
     # App config functions
     "get_config", "is_dry_run", "upsert_config",
+    # Artists functions
+    "add_alias", "alias_for", "alias_map", "canon", "list_aliases", "mismatches", 
+    "remove_alias", "set_ignored", "vendor_changes",
     # Connection functions
     "get_conn", "transaction",
     # Price functions

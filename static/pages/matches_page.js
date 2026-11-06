@@ -84,8 +84,15 @@ export class MatchesPage {
                             <span class="sub">${s && s.kw_extra.length ? "extra: " + esc(s.kw_extra.join(", ")) : ""}</span>
                             ${s && s.used_by.length ? '<span class="badge badge-used">UPC already on a variant</span>' : ""}
                             ${s && s.orders.length ? `<span class="sub">ordered ${s.orders.length}×, last ${Fmt.date(s.orders[0].submitted_at)}</span>` : ""}</div></div></td>
-                    <td><div class="pair"><span>${esc(p.vendor || "—")}</span>
-                        <span class="sub side">${s ? esc(s.artist || "—") : "—"}</span></div></td>
+                            <td><div class="pair"><span>${esc(p.vendor || "—")}</span>
+                            <span class="sub side">${s ? esc(s.artist || "—") : "—"}</span></div>
+                            ${
+                              s && !s.artist_match
+                                ? `<div style="display:flex;gap:4px;margin-top:4px">
+                              <button class="btn btn-ghost btn-sm" data-as="${i}">Use Shopify</button>
+                              <button class="btn btn-ghost btn-sm" data-aw="${i}">Use WebAMI</button></div>`
+                                : ""
+                            }</td>
                     <td><div class="pair"><span>${esc(p.type || p.product_type || "—")}</span>
                         <span class="sub side">${s ? esc(s.product_type || "—") : "—"}</span></div></td>
                     <td><div class="pair"><span>${p.cost != null ? Fmt.price(p.cost) : "—"}</span>
@@ -113,6 +120,27 @@ export class MatchesPage {
             this._noMatch(this.items[+b.dataset.n]),
           ),
         );
+      const pickArtist = async (alias, canonical) => {
+        try {
+          await API.post("/api/artists", { alias, canonical });
+          Toast.success("Artist saved");
+          this._load();
+        } catch (e) {
+          Toast.error(e.message);
+        }
+      };
+      body.querySelectorAll("[data-as]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const p = this.items[+b.dataset.as];
+          pickArtist(p.suggestions[0].artist, p.vendor);
+        }),
+      );
+      body.querySelectorAll("[data-aw]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const p = this.items[+b.dataset.aw];
+          pickArtist(p.vendor, p.suggestions[0].artist);
+        }),
+      );
       for (const id of ["#m-pager-top", "#m-pager-bottom"]) {
         buildPager(this.c.querySelector(id), data, (p) => {
           this.page = p;
@@ -129,13 +157,14 @@ export class MatchesPage {
     }
   }
 
-  async _save(p, upc, title, vtitle) {
+  async _save(p, upc, title, vtitle, vendor) {
     const product = {},
       variants = [];
     const v = { id: p.variant_id, upc };
     if (vtitle && vtitle !== p.variant_title) v.title = vtitle;
     variants.push(v);
     if (title && title !== p.title) product.title = title;
+    if (vendor && vendor !== p.vendor) product.vendor = vendor;
     try {
       const res = await API.put(
         `/api/products/${encodeURIComponent(p.product_id)}`,
@@ -177,17 +206,24 @@ export class MatchesPage {
               .map(
                 (c, i) => `<tr>
               <td><input type="radio" name="cand" value="${i}" ${i === 0 ? "checked" : ""}></td>
-              <td>${c.image_url ? `<img src="${esc(c.image_url)}" style="width:72px;height:72px;object-fit:cover;border-radius:4px">` : ''}</td>
+              <td>${c.image_url ? `<img src="${esc(c.image_url)}" style="width:72px;height:72px;object-fit:cover;border-radius:4px">` : ""}</td>
               <td>${esc(c.source)}${c.artist_match ? "" : " (artist differs)"}${c.kw_extra && c.kw_extra.length ? " · extra: " + esc(c.kw_extra.join(", ")) : ""}</td>
               <td>${truncCell(c.title)}</td><td>${truncCell(c.artist)}</td>
               <td>${esc(c.product_type || "—")}</td>
               <td class="num">${c.price != null ? Fmt.price(c.price) : "—"}</td>
               <td class="mono">${esc(c.upc)}</td>
               <td>${c.href ? `<a href="https://webami.aent.com${esc(c.href)}" target="_blank" rel="noopener">↗</a>` : ""}</td>
-              <td>${c.used_by && c.used_by.length
-                ? c.used_by.map(u => `<div class="badge badge-used">on ${esc(u.title)} — ${esc(u.variant_title || '')}</div>`).join('')
-                : '<span class="muted">not used</span>'}
-              ${(c.orders || []).map(o => `<div class="muted">order ${esc(o.number)} · ${Fmt.date(o.submitted_at)} · qty ${o.quantity}</div>`).join('')}</td></tr>`,
+              <td>${
+                c.used_by && c.used_by.length
+                  ? c.used_by
+                      .map(
+                        (u) =>
+                          `<div class="badge badge-used">on ${esc(u.title)} — ${esc(u.variant_title || "")}</div>`,
+                      )
+                      .join("")
+                  : '<span class="muted">not used</span>'
+              }
+              ${(c.orders || []).map((o) => `<div class="muted">order ${esc(o.number)} · ${Fmt.date(o.submitted_at)} · qty ${o.quantity}</div>`).join("")}</td></tr>`,
               )
               .join("")}
             </tbody></table></div>
@@ -255,6 +291,7 @@ export class MatchesPage {
               c.upc,
               upd ? f("title").value.trim() : null,
               upd ? f("vtitle").value : null,
+              c.canon_artist,
             );
           },
         },

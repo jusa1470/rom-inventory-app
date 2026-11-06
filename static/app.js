@@ -33,21 +33,23 @@ let autoSyncTimer = null;
 let autoSyncBusy = false;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function runJob(url) {
+async function runJob(url, name) {
   try {
-    const { job_id } = await API.post(url);
-    while ((await API.get(`/api/sync/status/${job_id}`)).status === 'running') await sleep(2000);
+    const { jobs } = await API.get('/api/sync/running');
+    let id = (jobs.find(j => j.name === name) || {}).id;
+    if (!id) id = (await API.post(url)).job_id;
+    while ((await API.get(`/api/sync/status/${id}`)).status === 'running') await sleep(2000);
   } catch (_) {}
 }
 
 async function autoSync() {
   if (autoSyncBusy) return;
   autoSyncBusy = true;
-  await runJob('/api/sync/shopify?full=false');
+  await runJob('/api/sync/shopify?full=false', 'Shopify Sync');
   let last = 0;
   try { last = +localStorage.getItem('webamiLastSync') || 0; } catch (_) {}
   if (Date.now() - last >= WEBAMI_MS) {
-    await runJob('/api/sync/webami');
+    await runJob('/api/sync/webami', 'WebAMI Sync');
     try { localStorage.setItem('webamiLastSync', String(Date.now())); } catch (_) {}
   }
   autoSyncBusy = false;

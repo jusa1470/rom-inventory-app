@@ -583,7 +583,8 @@ export class ProductsPage {
         const t = body.querySelector('#edit-product [name="title"]');
         if (s.title && t) t.value = s.title;
         const pf = (n) => body.querySelector(`#edit-product [name="${n}"]`);
-        if (c.genres && !pf("genres").value.trim())
+        if (c.canon_artist) pf('vendor').value = c.canon_artist;
+        if (c.genres && !pf('genres').value.trim())
           pf("genres").value = c.genres.split(",").join(", ");
         const slug = (x) =>
           String(x || "")
