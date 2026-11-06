@@ -310,3 +310,26 @@ def delete_products_not_synced_since(ts: str) -> int:
     with transaction() as conn:
         return conn.execute(
             "DELETE FROM shopify_products WHERE last_synced < ?", (ts,)).rowcount
+
+
+def add_local_product(product_id: str, product: dict) -> None:
+    d = {k: product[k] for k in _P_COLS if k in product}
+    for k in ("tags", "genres"):
+        if k in product:
+            d[k] = ",".join(product[k])
+    with transaction() as conn:
+        _upsert(conn, "shopify_products", "product_id", {"product_id": product_id, **d})
+
+
+def delete_local_product(product_id: str) -> None:
+    ids = "SELECT variant_id FROM shopify_variants WHERE product_id=?"
+    with transaction() as conn:
+        conn.execute(f"DELETE FROM price_queue WHERE variant_id IN ({ids})", (product_id,))
+        conn.execute(f"DELETE FROM price_checks WHERE variant_id IN ({ids})", (product_id,))
+        conn.execute("DELETE FROM shopify_products WHERE product_id=?", (product_id,))
+
+
+def delete_local_variant(variant_id: str) -> None:
+    with transaction() as conn:
+        for t in ("price_queue", "price_checks", "shopify_variants"):
+            conn.execute(f"DELETE FROM {t} WHERE variant_id=?", (variant_id,))

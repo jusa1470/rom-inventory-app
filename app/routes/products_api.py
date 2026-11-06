@@ -91,6 +91,67 @@ def filter_options():
     return db.get_filter_options()
 
 
+@router.post("")
+def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
+    if db.is_dry_run():
+        return {"ok": True, "dry_run": True}
+    p = body.product.model_dump(exclude_unset=True)
+    vs = [v.model_dump(exclude_unset=True) for v in body.variants]
+    cfg = db.get_config()
+    client = ShopifyClient(
+        creds["shopify_store"], creds["shopify_token"],
+        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
+    )
+    try:
+        cat = p.pop("category", "")
+        if cat:
+            c = client.find_category(cat)
+            p["category_id"] = strip_gid(c["id"])
+            p["category_name"] = c["name"]
+        pid = client.create_product(p, cfg)
+        created = client.create_variants(pid, vs, cfg) if vs else []
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    db.add_local_product(pid, p)
+    if vs:
+        db.add_local_variants(pid, vs, created)
+    return {"ok": True, "product_id": pid}
+
+
+@router.delete("/{product_id}")
+def delete_product(product_id: str, creds: dict = Depends(get_creds)):
+    if db.is_dry_run():
+        return {"ok": True, "dry_run": True}
+    cfg = db.get_config()
+    client = ShopifyClient(
+        creds["shopify_store"], creds["shopify_token"],
+        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
+    )
+    try:
+        client.delete_product(product_id)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    db.delete_local_product(product_id)
+    return {"ok": True}
+
+
+@router.delete("/{product_id}/variants/{variant_id}")
+def delete_variant(product_id: str, variant_id: str, creds: dict = Depends(get_creds)):
+    if db.is_dry_run():
+        return {"ok": True, "dry_run": True}
+    cfg = db.get_config()
+    client = ShopifyClient(
+        creds["shopify_store"], creds["shopify_token"],
+        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
+    )
+    try:
+        client.delete_variant(product_id, variant_id)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    db.delete_local_variant(variant_id)
+    return {"ok": True}
+
+
 @router.get("/{product_id}/webami-suggestions")
 def webami_suggestions(product_id: str, search: bool = False, variant_id: str | None = None, creds: dict = Depends(get_creds)):
     p = db.get_product_detail(product_id)

@@ -233,3 +233,29 @@ mutation OptionUpdate($productId: ID!, $option: OptionUpdateInput!) {
   }
 }
 """
+
+M_PRODUCT_CREATE: str = """
+mutation ProductCreate($product: ProductCreateInput!) {
+  productCreate(product: $product) {
+    product { id }
+    userErrors { field message }
+  }
+}
+"""
+
+M_PRODUCT_DELETE: str = """
+mutation ProductDelete($input: ProductDeleteInput!) {
+  productDelete(input: $input) {
+    deletedProductId
+    userErrors { field message }
+  }
+}
+"""
+
+M_VARIANTS_DELETE: str = """
+mutation VariantsDelete($productId: ID!, $variantsIds: [ID!]!) {
+  productVariantsBulkDelete(productId: $productId, variantsIds: $variantsIds) {
+    userErrors { field message }
+  }
+}
+"""

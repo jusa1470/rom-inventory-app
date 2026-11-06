@@ -8,7 +8,7 @@ from app.db.schema import init_db as _apply_schema
 from app.db.shopify_products import (
     count_products, get_filter_options, get_product_detail, list_products,
     save_shopify_product, update_local, delete_products_not_synced_since, 
-    add_local_variants
+    add_local_variants, add_local_product, delete_local_product, delete_local_variant
 )
 from app.db.sync_log import get_sync_log, log_sync
 from app.db.webami_orders import get_known_order_guids, get_webami_order, list_webami_orders, save_order, get_webami_stats, get_incomplete_order_guids
@@ -35,7 +35,8 @@ __all__: list[str] = [
     "price_queue_add", "price_queue_remove", "price_queue_filtered", "price_queue_set", "list_price_queue",
     # Shopify product functions
     "count_products", "get_filter_options", "get_product_detail", "list_products", "save_shopify_product", 
-    "update_local", "delete_products_not_synced_since", "add_local_variants",
+    "update_local", "delete_products_not_synced_since", "add_local_variants", "add_local_product", 
+    "delete_local_product", "delete_local_variant",
     # Sync log functions
     "get_sync_log", "log_sync",
     # Webami order functions

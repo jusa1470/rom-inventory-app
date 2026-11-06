@@ -13,9 +13,12 @@ from app.shopify.queries import (
     M_INVENTORY_SET,
     M_METAFIELDS_DELETE,
     M_OPTION_UPDATE,
+    M_PRODUCT_CREATE,
+    M_PRODUCT_DELETE,
     M_PRODUCT_UPDATE,
     M_VARIANT_MEDIA,
     M_VARIANTS_CREATE,
+    M_VARIANTS_DELETE,
     M_VARIANTS_UPDATE,
     Q_BULK_STATUS,
     Q_PRODUCT_OPTIONS,
@@ -290,6 +293,39 @@ class ShopifyClient:
             errs = (data.get("metafieldsDelete") or {}).get("userErrors")
             if errs:
                 raise RuntimeError(f"metafieldsDelete: {errs}")
+    
+    def create_product(self, f: dict, cfg: dict) -> str:
+        f = {k: v for k, v in f.items() if v not in ("", None, [])}
+        inp: dict[str, Any] = {}
+        for local, api in (("title", "title"), ("vendor", "vendor"), ("status", "status"),
+                           ("product_type", "productType"), ("tags", "tags"),
+                           ("handle", "handle")):
+            if local in f:
+                inp[api] = f[local]
+        if "category_id" in f:
+            inp["category"] = f"gid://shopify/TaxonomyCategory/{f['category_id']}"
+        mfs = _mfs(f, BULK_PRODUCT_MF, cfg)
+        if mfs:
+            inp["metafields"] = mfs
+        res = self.gql(M_PRODUCT_CREATE, {"product": inp}).get("productCreate") or {}
+        if res.get("userErrors"):
+            raise RuntimeError(f"productCreate: {res['userErrors']}")
+        return res["product"]["id"].rsplit("/", 1)[-1]
+
+    def delete_product(self, product_id: str) -> None:
+        data = self.gql(M_PRODUCT_DELETE,
+                        {"input": {"id": f"gid://shopify/Product/{product_id}"}})
+        errs = (data.get("productDelete") or {}).get("userErrors")
+        if errs:
+            raise RuntimeError(f"productDelete: {errs}")
+
+    def delete_variant(self, product_id: str, variant_id: str) -> None:
+        data = self.gql(M_VARIANTS_DELETE, {
+            "productId": f"gid://shopify/Product/{product_id}",
+            "variantsIds": [f"gid://shopify/ProductVariant/{variant_id}"]})
+        errs = (data.get("productVariantsBulkDelete") or {}).get("userErrors")
+        if errs:
+            raise RuntimeError(f"variantsDelete: {errs}")
 
     def _option_names(self, product_id: str) -> list[str]:
         data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})

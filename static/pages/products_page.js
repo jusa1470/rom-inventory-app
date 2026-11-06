@@ -96,6 +96,7 @@ export class ProductsPage {
         <div class="page-title">Products</div>
         <div class="search-row">
           <input class="input" id="p-search" placeholder="Search all columns — title, vendor, UPC…">
+          <button class="btn btn-primary" id="p-new">New product</button>
         </div>
         <div id="pager-top"></div>
         <div class="table-wrap">
@@ -116,6 +117,9 @@ export class ProductsPage {
     }
     this._buildHead(options);
 
+    this.c
+      .querySelector("#p-new")
+      .addEventListener("click", () => this._openEdit());
     this.c.querySelector("#p-search").addEventListener(
       "input",
       debounce((e) => {
@@ -351,12 +355,33 @@ export class ProductsPage {
       buttons: [
         { label: "Edit", cls: "btn-primary", onClick: () => this._openEdit(p) },
         { label: "Match WebAMI", onClick: () => this._openMatch(p) },
+        {
+          label: "Delete product",
+          cls: "btn-danger",
+          onClick: () => this._delete(p),
+        },
         { label: "Close", onClick: Modal.close },
       ],
     });
   }
 
   _openEdit(p) {
+    const isNew = !p;
+    p = p || {
+      title: "",
+      vendor: "",
+      product_type: "",
+      handle: "",
+      category_name: "",
+      type: "",
+      upc: "",
+      release_date: "",
+      genres: "",
+      tags: "",
+      status: "DRAFT",
+      variants: [],
+      images: [],
+    };
     const LB = {
       POUNDS: 1,
       OUNCES: 1 / 16,
@@ -381,7 +406,7 @@ export class ProductsPage {
       ["category", "Category (name)", p.category_name],
       ["type", "Type", p.type],
       ["upc", "UPC", p.upc],
-      ['release_date', 'Release date', p.release_date],
+      ["release_date", "Release date", p.release_date],
       ["genres", "Genres (comma separated)", listText(p.genres)],
       ["tags", "Tags (comma separated)", listText(p.tags)],
     ];
@@ -407,6 +432,12 @@ export class ProductsPage {
     const needNew = p.variants.every(
       (v) => !v.title || v.title === "Default Title",
     );
+    const vblock = (v) => `
+      <div class="form-grid" data-vid="${esc(v.variant_id)}" data-iid="${esc(v.inventory_item_id)}" data-mid="${esc(v.media_id)}" data-barcode="${esc(v.barcode)}"
+           style="margin-bottom:16px">
+        ${VF(v).map((f) => inp(...f)).join("")}
+        ${v.variant_id ? `<button type="button" class="btn btn-danger btn-sm" data-delv="${esc(v.variant_id)}">Delete variant</button>` : ""}
+      </div>`;
     const body = document.createElement("div");
     body.innerHTML = `
       <div class="form-grid" id="edit-product">
@@ -423,18 +454,31 @@ export class ProductsPage {
           </select>
         </div>
       </div>
-      <div class="section-label">Variants ${needNew ? '<button type="button" class="btn btn-ghost btn-sm" id="autofill">Auto-fill from WebAMI</button>' : ""}</div>
-      ${(needNew ? [{}] : p.variants)
-        .map(
-          (v) => `
-        <div class="form-grid" data-vid="${esc(v.variant_id)}" data-iid="${esc(v.inventory_item_id)}" data-mid="${esc(v.media_id)}" data-barcode="${esc(v.barcode)}"
-             style="margin-bottom:16px">
-          ${VF(v)
-              .map((f) => inp(...f))
-              .join("")}
-        </div>`,
-        )
-        .join("")}`;
+      <div class="section-label">Variants ${needNew && !isNew ? '<button type="button" class="btn btn-ghost btn-sm" id="autofill">Auto-fill from WebAMI</button>' : ""}
+        <button type="button" class="btn btn-ghost btn-sm" id="addv">Add variant</button></div>
+      <div id="variants">${(needNew ? [{}] : p.variants).map(vblock).join("")}</div>`;
+    body.addEventListener("click", async (e) => {
+      const d = e.target.closest("[data-delv]");
+      if (!d || !confirm("Delete this variant? This cannot be undone.")) return;
+      try {
+        const res = await API.delete(
+          `/api/products/${encodeURIComponent(p.product_id)}/variants/${encodeURIComponent(d.dataset.delv)}`,
+        );
+        if (res.dry_run) return Toast.warning("Test mode: nothing written");
+        d.closest("[data-vid]").remove();
+        Toast.success("Variant deleted");
+        this._load();
+      } catch (err) {
+        Toast.error(err.message);
+      }
+    });
+    body
+      .querySelector("#addv")
+      .addEventListener("click", () =>
+        body
+          .querySelector("#variants")
+          .insertAdjacentHTML("beforeend", vblock({})),
+      );
 
     const changed = (root) => {
       const out = {};
@@ -445,8 +489,8 @@ export class ProductsPage {
       return out;
     };
 
-    const save = async btn => {
-      const product = changed(body.querySelector('#edit-product'));
+    const save = async (btn) => {
+      const product = changed(body.querySelector("#edit-product"));
       ["tags", "genres"].forEach((k) => {
         if (k in product)
           product[k] = product[k]
@@ -475,19 +519,28 @@ export class ProductsPage {
             ...("inventory_quantity" in f
               ? { inventory_item_id: r.getAttribute("data-iid") ?? "" }
               : {}),
-              ...(!r.getAttribute('data-vid') && r.dataset.mid ? { media_id: r.dataset.mid } : {}),
-              ...(!r.getAttribute('data-vid') && r.dataset.barcode ? { barcode: r.dataset.barcode } : {}),
+            ...(!r.getAttribute("data-vid") && r.dataset.mid
+              ? { media_id: r.dataset.mid }
+              : {}),
+            ...(!r.getAttribute("data-vid") && r.dataset.barcode
+              ? { barcode: r.dataset.barcode }
+              : {}),
           };
         })
         .filter(Boolean);
-      if (variants.some(v => !v.id)) { product.upc = ''; product.release_date = ''; }
+      if (variants.some((v) => !v.id)) {
+        product.upc = "";
+        product.release_date = "";
+      }
       if (!Object.keys(product).length && !variants.length)
         return Modal.close();
       const label = btn.textContent;
       btn.disabled = true;
       btn.innerHTML = '<span class="spinner"></span>Saving…';
       try {
-        const res = await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
+        const res = isNew
+          ? await API.post('/api/products', { product, variants })
+          : await API.put(`/api/products/${encodeURIComponent(p.product_id)}`, { product, variants });
         Modal.close();
         res.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('Saved to Shopify');
         this._load();
@@ -518,9 +571,9 @@ export class ProductsPage {
         set("description", c.description);
         set("release_date", c.release_date);
         const old = p.variants[0];
-        if (old) set('inventory_quantity', old.inventory_quantity);
-        row.dataset.mid = old?.media_id || p.images?.[0]?.media_id || '';
-        row.dataset.barcode = old?.barcode || '';
+        if (old) set("inventory_quantity", old.inventory_quantity);
+        row.dataset.mid = old?.media_id || p.images?.[0]?.media_id || "";
+        row.dataset.barcode = old?.barcode || "";
         const LBS = { lb: 1, lbs: 1, oz: 1 / 16, kg: 2.20462, g: 1 / 453.592 };
         const wl =
           c.weight != null
@@ -529,13 +582,22 @@ export class ProductsPage {
         set("weight", wl ?? 0.0);
         const t = body.querySelector('#edit-product [name="title"]');
         if (s.title && t) t.value = s.title;
-        const pf = n => body.querySelector(`#edit-product [name="${n}"]`);
-        if (c.genres && !pf('genres').value.trim()) pf('genres').value = c.genres.split(',').join(', ');
-        const slug = x => String(x || '').toLowerCase().replace(/&/g, ' and ')
-          .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-        const h = [pf('vendor').value, pf('title').value, pf('type').value || pf('product_type').value]
-          .map(slug).filter(Boolean).join('-');
-        if (h) pf('handle').value = h;
+        const pf = (n) => body.querySelector(`#edit-product [name="${n}"]`);
+        if (c.genres && !pf("genres").value.trim())
+          pf("genres").value = c.genres.split(",").join(", ");
+        const slug = (x) =>
+          String(x || "")
+            .toLowerCase()
+            .replace(/&/g, " and ")
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "");
+        const tt = pf('title').value, vv = pf('vendor').value;
+        const tm = tt.match(/^(.*?)\s+-\s+(.+)$/);
+        const h = [vv, tm && slug(tm[2]) === slug(vv) ? tm[1] : tt, pf('type').value || pf('product_type').value]
+          .map(slug)
+          .filter(Boolean)
+          .join("-");
+        if (h) pf("handle").value = h;
         if (c.price != null) {
           set("cost", c.price.toFixed(2));
           set("price", (c.price / 0.66).toFixed(2));
@@ -547,8 +609,32 @@ export class ProductsPage {
     const afBtn = body.querySelector("#autofill");
     if (afBtn) afBtn.addEventListener("click", autofill);
 
+    const slug = x => String(x || '').toLowerCase().replace(/&/g, ' and ')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const handleTitle = (t, vendor) => {
+      const m = String(t || '').match(/^(.*?)\s+-\s+(.+)$/);
+      return m && slug(m[2]) === slug(vendor) ? m[1] : t;
+    };
+    const pf2 = n => body.querySelector(`#edit-product [name="${n}"]`);
+    const hf = pf2("handle");
+    const note = document.createElement("div");
+    note.className = "muted";
+    note.style.display = "none";
+    note.textContent = "Handle will change — old product URL will break";
+    hf.parentNode.appendChild(note);
+    const updNote = () => {
+      note.style.display = !isNew && hf.value.trim() !== hf.dataset.orig ? "" : "none";
+    };
+    hf.addEventListener("input", updNote);
+    ["vendor", "title", "type", "product_type"].forEach(n =>
+      pf2(n).addEventListener("input", () => {
+        hf.value = [pf2("vendor").value, handleTitle(pf2("title").value, pf2("vendor").value),
+        pf2("type").value || pf2("product_type").value].map(slug).filter(Boolean).join("-");
+        updNote();
+      }));
+
     Modal.open({
-      title: `Edit: ${p.title}`,
+      title: isNew ? "New product" : `Edit: ${p.title}`,
       body,
       width: "96vw",
       buttons: [
@@ -651,5 +737,26 @@ export class ProductsPage {
         { label: "Cancel", onClick: Modal.close },
       ],
     });
+  }
+
+  async _delete(p) {
+    if (
+      !confirm(
+        `Delete "${p.title}" and all its variants from Shopify? This cannot be undone.`,
+      )
+    )
+      return;
+    try {
+      const res = await API.delete(
+        `/api/products/${encodeURIComponent(p.product_id)}`,
+      );
+      Modal.close();
+      res.dry_run
+        ? Toast.warning("Test mode: nothing written")
+        : Toast.success("Product deleted");
+      this._load();
+    } catch (e) {
+      Toast.error(e.message);
+    }
   }
 }
