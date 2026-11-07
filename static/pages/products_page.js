@@ -348,6 +348,19 @@ export class ProductsPage {
         </table>
       </div>`;
 
+      try {
+        const { items } = await API.get(`/api/products/${encodeURIComponent(productId)}/receipts`);
+        if (items.length) body.insertAdjacentHTML("beforeend", `
+          <div class="section-label">Receipts (${items.length})</div>
+          <div class="table-wrap"><table class="variants-table">
+            <thead><tr><th>Date</th><th>Order</th><th>UPC</th><th class="num">Qty</th><th></th></tr></thead>
+            <tbody>${items.map((r) => `<tr>
+              <td>${Fmt.datetime(r.created_at)}</td><td class="mono">${esc(r.number)}</td>
+              <td class="mono">${esc(r.upc)}</td><td class="num">${r.qty}</td>
+              <td>${r.reversed_at ? '<span class="badge badge-draft">Undone</span>' : ""}</td></tr>`).join("")}
+            </tbody></table></div>`);
+      } catch (_) { /* non-critical */ }
+
     Modal.open({
       title: p.title,
       body,

@@ -302,3 +302,5 @@ select.input { cursor: pointer; }
 .modal-fit { max-height: calc(92vh - 220px); overflow: auto; }
 .modal-fit td:last-child { white-space: nowrap; overflow: visible; }
 .modal-fit thead th { position: sticky; top: 0; z-index: 1; }
+
+.page:has(#o-body), .page:has(#o-back) { max-width: none; width: 100%; }

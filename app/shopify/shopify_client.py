@@ -398,7 +398,8 @@ class ShopifyClient:
             if errs:
                 raise RuntimeError(f"inventorySetQuantities: {errs}")
     
-    def create_variants(self, product_id: str, variants: list[dict], cfg: dict) -> list[dict]:
+    def create_variants(self, product_id: str, variants: list[dict], cfg: dict,
+                        replace_default: bool = True) -> list[dict]:
         options = self._rename_option(product_id)
         bulk: list[dict] = []
         for f in variants:
@@ -427,7 +428,8 @@ class ShopifyClient:
                                              "locationId": cfg["shopify_location_id"]}]
             bulk.append(v)
         data = self.gql(M_VARIANTS_CREATE, {
-            "productId": f"gid://shopify/Product/{product_id}", "variants": bulk})
+            "productId": f"gid://shopify/Product/{product_id}", "variants": bulk,
+            "strategy": "REMOVE_STANDALONE_VARIANT" if replace_default else "DEFAULT"})
         res = data.get("productVariantsBulkCreate") or {}
         if res.get("userErrors"):
             raise RuntimeError(f"variantsCreate: {res['userErrors']}")

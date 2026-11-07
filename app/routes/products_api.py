@@ -218,6 +218,11 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
     return {"items": cands[:15]}
 
 
+@router.get("/{product_id}/receipts")
+def product_receipts(product_id: str):
+    return {"items": db.list_product_receipts(product_id)}
+
+
 @router.get("/{product_id}")
 def get_shopify_product_route(product_id: str):
     product = db.get_product_detail(product_id)
@@ -248,7 +253,11 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
             client.update_product(product_id, p, cfg)
         if vs:
             client.update_variants(product_id, vs, cfg)
-        created = client.create_variants(product_id, new_vs, cfg) if new_vs else []
+        existing = (db.get_product_detail(product_id) or {}).get("variants", [])
+        only_default = len(existing) == 1 and (
+            not existing[0]["title"] or existing[0]["title"] == "Default Title")
+        created = (client.create_variants(product_id, new_vs, cfg, only_default)
+                   if new_vs else [])
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.update_local(product_id, p, vs)

@@ -162,8 +162,16 @@ MIGRATIONS: list[str] = [
     );
     CREATE TABLE receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_guid TEXT NOT NULL, 
+        upc TEXT NOT NULL, 
+        qty INTEGER NOT NULL,
+        variant_id TEXT, 
+        created_at TEXT DEFAULT (datetime('now')),
+        reversed_at TEXT
+    );
+    CREATE TABLE receipt_queue (
         order_guid TEXT NOT NULL, upc TEXT NOT NULL, qty INTEGER NOT NULL,
-        variant_id TEXT, created_at TEXT DEFAULT (datetime('now'))
+        PRIMARY KEY (order_guid, upc)
     );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);

@@ -189,9 +189,10 @@ mutation VariantsUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!
 """
 
 M_VARIANTS_CREATE: str = """
-mutation VariantsCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+mutation VariantsCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!,
+                        $strategy: ProductVariantsBulkCreateStrategy!) {
   productVariantsBulkCreate(productId: $productId, variants: $variants,
-                            strategy: REMOVE_STANDALONE_VARIANT) {
+                            strategy: $strategy) {
     productVariants { id inventoryItem { id } }
     userErrors { field message }
   }

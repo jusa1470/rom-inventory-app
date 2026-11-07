@@ -238,3 +238,26 @@ def ignore_product(variant_id: str) -> None:
     with transaction() as conn:
         conn.execute("INSERT OR IGNORE INTO upc_ignored (product_id) VALUES (?)", (variant_id,))
     drop_from_match_cache(variant_id)
+
+
+def shopify_candidates(w: dict, limit: int = 5) -> list[dict]:
+    conn = get_conn()
+    amap = alias_map()
+    wt = w.get("product_type")
+    wv = canon(w.get("artist") or w.get("vendor"), amap)
+    out = []
+    for p in rows(conn.execute(
+            "SELECT product_id, title, vendor, type, product_type FROM shopify_products")):
+        if not format_ok(p["type"] or p["product_type"], wt):
+            continue
+        ts = sim(simplify(p["title"]), simplify(w["title"]))
+        vs = sim(canon(p["vendor"], amap), wv)
+        if ts >= 0.6 and vs >= 0.6:
+            out.append({**p, "score": ts + vs})
+    out.sort(key=lambda x: -x["score"])
+    out = out[:limit]
+    for p in out:
+        p["variants"] = rows(conn.execute(
+            "SELECT variant_id, title, upc, inventory_quantity FROM shopify_variants "
+            "WHERE product_id=? ORDER BY rowid", (p["product_id"],)).fetchall())
+    return out
