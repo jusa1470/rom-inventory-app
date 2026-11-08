@@ -248,6 +248,8 @@ def shopify_candidates(w: dict, limit: int = 5) -> list[dict]:
     out = []
     for p in rows(conn.execute(
             "SELECT product_id, title, vendor, type, product_type FROM shopify_products")):
+        if not (tokens(p["vendor"]) & tokens(wv)):
+            continue
         if not format_ok(p["type"] or p["product_type"], wt):
             continue
         ts = sim(simplify(p["title"]), simplify(w["title"]))
@@ -256,6 +258,21 @@ def shopify_candidates(w: dict, limit: int = 5) -> list[dict]:
             out.append({**p, "score": ts + vs})
     out.sort(key=lambda x: -x["score"])
     out = out[:limit]
+    for p in out:
+        p["variants"] = rows(conn.execute(
+            "SELECT variant_id, title, upc, inventory_quantity FROM shopify_variants "
+            "WHERE product_id=? ORDER BY rowid", (p["product_id"],)).fetchall())
+    return out
+
+
+def search_shopify(q: str, limit: int = 15) -> list[dict]:
+    conn = get_conn()
+    like = f"%{q}%"
+    out = rows(conn.execute(
+        "SELECT product_id, title, vendor FROM shopify_products WHERE title LIKE ? OR vendor LIKE ? "
+        "OR product_id IN (SELECT product_id FROM shopify_variants WHERE upc LIKE ?) "
+        "ORDER BY vendor COLLATE NOCASE, title COLLATE NOCASE LIMIT ?",
+        [like, like, like, limit]).fetchall())
     for p in out:
         p["variants"] = rows(conn.execute(
             "SELECT variant_id, title, upc, inventory_quantity FROM shopify_variants "

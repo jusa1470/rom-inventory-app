@@ -137,8 +137,10 @@ def log_receipt(guid: str, upc: str, qty: int, variant_id) -> None:
 
 def get_variant(variant_id: str):
     return row(get_conn().execute(
-        "SELECT variant_id, product_id, inventory_item_id, inventory_quantity "
-        "FROM shopify_variants WHERE variant_id=?", (variant_id,)).fetchone())
+        "SELECT v.variant_id, v.product_id, v.inventory_item_id, v.inventory_quantity, v.upc, "
+        "v.title AS variant_title, CAST(v.cost AS REAL) AS cost, p.title AS product_title "
+        "FROM shopify_variants v JOIN shopify_products p ON p.product_id=v.product_id "
+        "WHERE v.variant_id=?", (variant_id,)).fetchone())
 
 
 def get_receipt(rid: int):
@@ -161,18 +163,24 @@ def list_order_receipts(guid: str) -> list[dict]:
 def rq_set(guid: str, upc: str, qty: int) -> None:
     with transaction() as conn:
         if qty > 0:
-            conn.execute("INSERT OR REPLACE INTO receipt_queue (order_guid, upc, qty) VALUES (?,?,?)",
-                         (guid, upc, qty))
+            conn.execute(
+                "INSERT INTO receipt_queue (order_guid, upc, qty) VALUES (?,?,?) "
+                "ON CONFLICT(order_guid, upc) DO UPDATE SET qty=excluded.qty", (guid, upc, qty))
         else:
             conn.execute("DELETE FROM receipt_queue WHERE order_guid=? AND upc=?", (guid, upc))
 
 
+def rq_target(guid: str, upc: str, action, variant_id, product_id) -> None:
+    with transaction() as conn:
+        conn.execute("UPDATE receipt_queue SET action=?, variant_id=?, product_id=? "
+                     "WHERE order_guid=? AND upc=?", (action, variant_id, product_id, guid, upc))
+
+
 def rq_list() -> list[dict]:
     return rows(get_conn().execute(
-        "SELECT q.order_guid, q.upc, q.qty, o.number, i.title, i.artist, i.quantity AS ordered, "
-        "i.price AS wm_cost, "
-        "(SELECT variant_id FROM shopify_variants v WHERE v.upc=q.upc LIMIT 1) AS variant_id, "
-        "(SELECT CAST(cost AS REAL) FROM shopify_variants v WHERE v.upc=q.upc LIMIT 1) AS cost "
+        "SELECT q.order_guid, q.upc, q.qty, q.action AS t_action, q.variant_id AS t_variant, "
+        "q.product_id AS t_product, o.number, i.title, i.artist, i.quantity AS ordered, "
+        "i.price AS wm_cost, i.product_id AS wp_id "
         "FROM receipt_queue q JOIN webami_orders o ON o.guid=q.order_guid "
         "LEFT JOIN webami_order_items i ON i.order_guid=q.order_guid AND i.upc=q.upc "
         "GROUP BY q.order_guid, q.upc ORDER BY o.submitted_at DESC, i.position").fetchall())

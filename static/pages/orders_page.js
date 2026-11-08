@@ -66,9 +66,9 @@ export class OrdersPage {
 
   async _qcount() {
     try {
-      const { items } = await API.get('/api/orders/queue');
+      const { count } = await API.get('/api/orders/queue/count');
       const el = this.c.querySelector('#o-qcount');
-      if (el) el.textContent = items.length;
+      if (el) el.textContent = count;
     } catch (_) { /* non-critical */ }
   }
 
@@ -140,8 +140,7 @@ export class OrdersPage {
         </select>
         <button class="btn btn-ghost btn-sm" id="o-all">Fill remaining</button>
         <button class="btn btn-ghost btn-sm" id="o-clear">Clear inputs</button>
-        <button class="btn btn-primary btn-sm" id="o-submit">Stage</button>
-        <button class="btn btn-primary btn-sm" id="o-stagego">Stage & review</button>
+        <button class="btn btn-primary btn-sm" id="o-addall">Add all entered</button>
           <button class="btn btn-ghost btn-sm" id="o-queue2">Review queue</button>
           <button class="btn btn-ghost btn-sm" id="o-hist">Receipts</button>
         </div>
@@ -154,16 +153,19 @@ export class OrdersPage {
             </tr></thead>
             <tbody>
             ${o.items.map(i => {
-              const left = Math.max(0, i.quantity - i.received);
+              const left = Math.max(0, i.quantity - i.received - i.queued);
               return `
               <tr>
-                <td>${truncCell(i.title)}${i.variant_id ? '' : i.product_id ? ` <button class="btn btn-ghost btn-sm" data-res="${esc(i.upc)}">Resolve</button>` : ' <span class="badge badge-used">New</span>'}</td>
+                <td>${truncCell(i.title)}${i.variant_id ? '' : ' <span class="badge badge-used">No UPC match</span>'}</td>
                 <td>${truncCell(i.artist)}</td>
                 <td>${esc(i.format || '—')}</td>
                 <td class="mono">${esc(Fmt.upc(i.upc))}</td>
                 <td class="mono">${esc(i.sku || '—')}</td>
                 <td class="num">${i.quantity}</td>
-                <td class="num">${i.received}</td>
+                <td class="num">${i.received}${i.queued ? ` <span class="muted">(+${i.queued} queued)</span>` : ''}</td>
+                <td class="num"><div style="display:flex;gap:6px;justify-content:flex-end">
+                  <input class="input" type="number" min="0" max="${left}" style="width:70px;height:28px;text-align:right" data-recv="${esc(i.upc)}" data-left="${left}" value="${esc(d[i.upc] ?? '')}">
+                  <button class="btn btn-primary btn-sm" data-add="${esc(i.upc)}" ${left ? '' : 'disabled'}>Add</button></div></td>
                 <td class="num"><input class="input" type="number" min="0" max="${left}" style="width:70px;height:28px;text-align:right" data-recv="${esc(i.upc)}" data-left="${left}" value="${esc(d[i.upc] ?? (i.queued || ''))}"></td>
                 <td class="num">${Fmt.price(i.price)}</td>
                 <td class="num">${Fmt.price((i.quantity || 0) * (i.price || 0))}</td>
@@ -186,8 +188,6 @@ export class OrdersPage {
         i.value = i.dataset.left;
         i.dispatchEvent(new Event('input'));
       }));
-    this.c.querySelectorAll('[data-res]').forEach(b =>
-      b.addEventListener('click', () => this._resolve(guid, b.dataset.res)));
     this.c.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => {
       const k = th.dataset.sort;
       if (!k) return;
@@ -202,19 +202,22 @@ export class OrdersPage {
     }));
     this.c.querySelector('#o-queue2').addEventListener('click', () => this._queue());
     this.c.querySelector('#o-hist').addEventListener('click', () => this._receipts(guid));
-    const stage = async after => {
-      const lines = Object.entries(d).map(([upc, v]) => ({ upc, qty: parseInt(v, 10) || 0 }));
+    const add = async upcs => {
+      const lines = upcs.map(u => ({ upc: u, qty: parseInt(d[u], 10) || 0 })).filter(l => l.qty > 0);
       if (!lines.length) return Toast.info('Nothing entered');
       try {
         await API.post(`/api/orders/${encodeURIComponent(guid)}/stage`, { lines });
-        Toast.success(`Staged ${lines.filter(l => l.qty > 0).length} lines`);
-        delete this.draft[guid];
+        lines.forEach(l => delete d[l.upc]);
+        Toast.success(`Added ${lines.length} to review queue`);
         await this._openOrder(guid);
-        if (after) this._queue();
       } catch (e) { Toast.error(e.message); }
     };
-    this.c.querySelector('#o-submit').addEventListener('click', () => stage(false));
-    this.c.querySelector('#o-stagego').addEventListener('click', () => stage(true));
+    this.c.querySelectorAll('[data-add]').forEach(b =>
+      b.addEventListener('click', () => add([b.dataset.add])));
+    this.c.querySelectorAll('[data-recv]').forEach(i => i.addEventListener('keydown', e => {
+      if (e.key === 'Enter') add([i.dataset.recv]);
+    }));
+    this.c.querySelector('#o-addall').addEventListener('click', () => add(Object.keys(d)));
     this.c.querySelector('#o-clear').addEventListener('click', () => {
       Object.keys(d).forEach(x => delete d[x]);
       this.c.querySelectorAll('[data-recv]').forEach(i => { i.value = ''; });
@@ -275,18 +278,34 @@ export class OrdersPage {
   async _queue() {
     let items;
     try { ({ items } = await API.get('/api/orders/queue')); } catch (e) { return Toast.error(e.message); }
-    let createNew = false;
-    const off = new Set();
     const k = r => `${r.order_guid}|${r.upc}`;
-    const sel = new Set(items.map(k));
-    const diff = r => r.variant_id && r.wm_cost != null && Math.abs((r.cost || 0) - r.wm_cost) >= 0.005;
-    const body = document.createElement('div');
+    const keep = this._qsel;
+    this._qsel = null;
+    const sel = new Set(keep ? items.map(k).filter(x => keep.has(x)) : items.map(k));
+    const off = this._qoff || new Set();
+    this._qoff = null;
+    const L = { update: 'Update quantity', map: 'Update quantity + set UPC', variant: 'New variant', new: 'New product + variant' };
+    const B = { upc: 'UPC match', closest: 'Closest match', manual: 'Manual', none: 'No match' };
+    const cls = { update: 'badge-new', map: 'badge-active', variant: 'badge-used', new: 'badge-used' };
+    const diff = r => ['update', 'map'].includes(r.plan.action) && r.wm_cost != null
+      && Math.abs((r.plan.cost || 0) - r.wm_cost) >= 0.005;
+    const tgt = r => {
+      const p = r.plan;
+      if (p.action === 'new') return `<span class="muted">New:</span> ${esc(p.new_title || '—')}<div class="muted">${esc(p.new_vtitle || '')}</div>`;
+      if (p.action === 'variant') return `${esc(p.product_title || '—')}<div class="muted">New variant: ${esc(p.new_vtitle || '—')}</div>`;
+      return `${esc(p.product_title || '—')}<div class="muted">${esc(p.variant_title || '—')} · stock ${p.stock ?? 0} → ${(p.stock || 0) + r.qty}${p.action === 'map' ? ' · UPC will be set' : ''}</div>`;
+    };
     const qs = s => `/api/orders/queue/${encodeURIComponent(s.order_guid)}/${encodeURIComponent(s.upc)}`;
+    const body = document.createElement('div');
     const upd = () => {
       const b = document.querySelector('.modal-footer .btn-primary');
       if (b && !b.disabled) b.textContent = `Push selected (${sel.size})`;
     };
     const drop = keys => { items = items.filter(r => !keys.includes(k(r))); keys.forEach(x => sel.delete(x)); };
+    const retarget = async (r, t) => {
+      try { await API.put(`${qs(r)}/target`, t); await this._queue(); }
+      catch (e) { Toast.error(e.message); }
+    };
     const draw = () => {
       body.innerHTML = items.length ? `
         <div class="search-row" style="align-items:center;flex-wrap:wrap">
@@ -294,26 +313,31 @@ export class OrdersPage {
           <button class="btn btn-ghost btn-sm" id="q-none">Deselect all</button>
           <button class="btn btn-ghost btn-sm" id="q-rmsel">Remove selected</button>
           <button class="btn btn-danger btn-sm" id="q-rmall">Remove all</button>
-          <label class="check-row" style="margin:0 0 0 12px"><input type="checkbox" id="q-new" ${createNew ? 'checked' : ''}><span>Create new products for unmatched</span></label>
         </div>
         <div class="table-wrap modal-fit"><table class="variants-table">
-          <thead><tr><th></th><th>Order</th><th>Title</th><th>Artist</th><th>UPC</th>
-            <th class="num">Ordered</th><th class="num">Cost (Shopify → WebAMI)</th><th class="num">Receive</th><th></th></tr></thead>
+          <thead><tr><th></th><th>Order</th><th>WebAMI item</th><th>Action</th><th>Shopify target</th>
+            <th class="num">Cost (Shopify → WebAMI)</th><th class="num">Receive</th><th></th></tr></thead>
           <tbody>${items.map((r, i) => `<tr>
             <td><input type="checkbox" data-s="${i}" ${sel.has(k(r)) ? 'checked' : ''}></td>
             <td class="mono">${esc(r.number)}</td>
-            <td>${truncCell(r.title)}${r.variant_id ? '' : ' <span class="badge badge-used">Unmatched</span>'}</td>
-            <td>${truncCell(r.artist)}</td><td class="mono">${esc(r.upc)}</td>
-            <td class="num">${r.ordered ?? '—'}</td>
-            <td class="num">${diff(r) ? `<label class="check-row" style="margin:0;justify-content:flex-end"><input type="checkbox" data-c="${i}" ${off.has(k(r)) ? '' : 'checked'}><span>${Fmt.price(r.cost)} → ${Fmt.price(r.wm_cost)} (update price)</span></label>` : '—'}</td>
+            <td>${truncCell(r.title)}<div class="muted">${esc(r.artist || '')} · <span class="mono">${esc(r.upc)}</span></div></td>
+            <td><span class="badge ${cls[r.plan.action]}">${L[r.plan.action]}</span>
+              <div class="muted">${B[r.plan.basis]}</div></td>
+            <td style="white-space:normal">${tgt(r)}</td>
+            <td class="num">${diff(r) ? `<label class="check-row" style="margin:0;justify-content:flex-end"><input type="checkbox" data-c="${i}" ${off.has(k(r)) ? '' : 'checked'}><span>${Fmt.price(r.plan.cost)} → ${Fmt.price(r.wm_cost)} (update price)</span></label>` : '—'}</td>
             <td class="num"><input class="input" type="number" min="1" max="${r.ordered ?? ''}" style="width:70px;height:28px;text-align:right" data-q="${i}" value="${r.qty}"></td>
-            <td><button class="btn btn-ghost btn-sm" data-rm="${i}">Remove</button></td></tr>`).join('')}
+            <td style="white-space:normal"><div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="btn btn-ghost btn-sm" data-opt="${i}">Change…</button>
+              ${r.plan.basis === 'closest' && r.plan.action === 'map' ? `<button class="btn btn-ghost btn-sm" data-nv="${i}">New variant instead</button>` : ''}
+              ${r.plan.basis === 'closest' ? `<button class="btn btn-ghost btn-sm" data-np="${i}">New product instead</button>` : ''}
+              ${r.plan.basis === 'manual' ? `<button class="btn btn-ghost btn-sm" data-auto="${i}">Reset</button>` : ''}
+              <button class="btn btn-ghost btn-sm" data-rm="${i}">Remove</button></div></td></tr>`).join('')}
           </tbody></table></div>`
         : '<div class="muted">Queue is empty</div>';
       upd();
-      const $ = s => body.querySelector(s);
       if (!items.length) return;
-      $('#q-new').addEventListener('change', e => { createNew = e.target.checked; });
+      const $ = s => body.querySelector(s);
+      const each = (s, fn) => body.querySelectorAll(s).forEach(fn);
       $('#q-all').addEventListener('click', () => { items.forEach(r => sel.add(k(r))); draw(); });
       $('#q-none').addEventListener('click', () => { sel.clear(); draw(); });
       $('#q-rmsel').addEventListener('click', async () => {
@@ -328,26 +352,43 @@ export class OrdersPage {
         try { await API.delete('/api/orders/queue'); items = []; sel.clear(); draw(); this._qcount(); }
         catch (e) { Toast.error(e.message); }
       });
-      body.querySelectorAll('[data-s]').forEach(c => c.addEventListener('change', () => {
+      each('[data-s]', c => c.addEventListener('change', () => {
         const key = k(items[+c.dataset.s]);
         c.checked ? sel.add(key) : sel.delete(key);
         upd();
       }));
-      body.querySelectorAll('[data-q]').forEach(inp => inp.addEventListener('change', async () => {
+      each('[data-c]', c => c.addEventListener('change', () => {
+        const key = k(items[+c.dataset.c]);
+        c.checked ? off.delete(key) : off.add(key);
+      }));
+      each('[data-q]', inp => inp.addEventListener('change', async () => {
         const i = +inp.dataset.q, v = parseInt(inp.value, 10);
         if (!(v > 0)) { inp.value = items[i].qty; return Toast.error('Invalid qty'); }
         try {
           const r = await API.put(qs(items[i]), { qty: v });
           items[i].qty = r.qty;
           inp.value = r.qty;
-          if (!r.qty) { drop([k(items[i])]); draw(); this._qcount(); }
         } catch (e) { Toast.error(e.message); }
       }));
-      body.querySelectorAll('[data-c]').forEach(c => c.addEventListener('change', () => {
-        const key = k(items[+c.dataset.c]);
-        c.checked ? off.delete(key) : off.add(key);
+      each('[data-opt]', b => b.addEventListener('click', () => {
+        this._qsel = new Set(sel);
+        this._qoff = off;
+        this._options(items[+b.dataset.opt]);
       }));
-      body.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', async () => {
+      each('[data-nv]', b => b.addEventListener('click', () => {
+        const r = items[+b.dataset.nv];
+        this._qsel = new Set(sel); this._qoff = off;
+        retarget(r, { action: 'variant', product_id: r.plan.product_id });
+      }));
+      each('[data-np]', b => b.addEventListener('click', () => {
+        this._qsel = new Set(sel); this._qoff = off;
+        retarget(items[+b.dataset.np], { action: 'new' });
+      }));
+      each('[data-auto]', b => b.addEventListener('click', () => {
+        this._qsel = new Set(sel); this._qoff = off;
+        retarget(items[+b.dataset.auto], { action: 'auto' });
+      }));
+      each('[data-rm]', b => b.addEventListener('click', async () => {
         const i = +b.dataset.rm;
         try { await API.delete(qs(items[i])); drop([k(items[i])]); draw(); this._qcount(); }
         catch (e) { Toast.error(e.message); }
@@ -360,16 +401,17 @@ export class OrdersPage {
         { label: 'Push selected', cls: 'btn-primary', onClick: async btn => {
           const chosen = items.filter(r => sel.has(k(r)));
           if (!chosen.length) return Toast.info('Nothing selected');
+          const n = chosen.filter(r => ['variant', 'new'].includes(r.plan.action)).length;
+          if (n && !confirm(`${n} line(s) will create new products/variants. Continue?`)) return;
           btn.disabled = true;
           btn.innerHTML = '<span class="spinner"></span>Pushing…';
           try {
             const r = await API.post('/api/orders/queue/push', {
-              create_new: createNew,
               keys: chosen.map(k),
               cost_keys: chosen.filter(x => diff(x) && !off.has(k(x))).map(k),
             });
             if (r.dry_run) { Toast.warning('Test mode: nothing written'); btn.disabled = false; upd(); return; }
-            const msg = `Updated ${r.updated}, created ${r.created}` + (r.skipped.length ? `, skipped ${r.skipped.length}` : '');
+            const msg = `Updated ${r.updated}, new variants ${r.variants}, new products ${r.created}`;
             r.errors.length ? Toast.warning(`${msg}; ${r.errors[0]}`) : Toast.success(msg);
             Modal.close();
             this._showList();
@@ -383,6 +425,57 @@ export class OrdersPage {
       ],
     });
     upd();
+  }
+
+  async _options(r) {
+    const base = `/api/orders/queue/${encodeURIComponent(r.order_guid)}/${encodeURIComponent(r.upc)}`;
+    const body = document.createElement('div');
+    body.innerHTML = `
+      <div>${esc(r.title)} — ${esc(r.artist || '')}</div>
+      <div class="muted mono">UPC ${esc(r.upc)}</div>
+      <div class="search-row" style="margin-top:12px">
+        <input class="input" id="op-q" placeholder="Search Shopify title, vendor or UPC…">
+        <button class="btn btn-ghost" id="op-go">Search</button></div>
+      <div id="op-list"></div>`;
+    const list = body.querySelector('#op-list');
+    const set = async t => {
+      try { await API.put(`${base}/target`, t); this._queue(); } catch (e) { Toast.error(e.message); }
+    };
+    let found = [];
+    const draw = () => {
+      list.innerHTML = found.length ? `<div class="table-wrap modal-fit"><table class="variants-table">
+        <thead><tr><th>Product</th><th>Vendor</th><th>Variants</th><th></th></tr></thead>
+        <tbody>${found.map(p => `<tr>
+          <td>${truncCell(p.title)}</td><td>${truncCell(p.vendor)}</td>
+          <td>${p.variants.map(v => `<div style="display:flex;gap:8px;align-items:center;margin:2px 0">
+            <span>${esc(v.title || '—')}</span><span class="muted mono">${esc(v.upc || 'no UPC')}</span>
+            <span class="muted">qty ${v.inventory_quantity ?? 0}</span>
+            <button class="btn btn-ghost btn-sm" data-use="${esc(v.variant_id)}" data-diff="${v.upc && v.upc !== r.upc ? 1 : ''}">Use this variant</button></div>`).join('')}</td>
+          <td><button class="btn btn-ghost btn-sm" data-nv="${esc(p.product_id)}">New variant here</button></td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="muted" style="margin-top:12px">No results</div>';
+      list.querySelectorAll('[data-use]').forEach(b => b.addEventListener('click', () => {
+        if (b.dataset.diff && !confirm('This variant has a different UPC. Overwrite it?')) return;
+        set({ action: 'use', variant_id: b.dataset.use });
+      }));
+      list.querySelectorAll('[data-nv]').forEach(b => b.addEventListener('click', () =>
+        set({ action: 'variant', product_id: b.dataset.nv })));
+    };
+    const load = async q => {
+      try { ({ items: found } = await API.get(`${base}/options?q=${encodeURIComponent(q)}`)); draw(); }
+      catch (e) { Toast.error(e.message); }
+    };
+    const qi = body.querySelector('#op-q');
+    body.querySelector('#op-go').addEventListener('click', () => load(qi.value.trim()));
+    qi.addEventListener('keydown', e => { if (e.key === 'Enter') load(qi.value.trim()); });
+    await load('');
+    Modal.open({
+      title: 'Choose Shopify match', body, width: '96vw',
+      buttons: [
+        { label: 'New product + variant', cls: 'btn-primary', onClick: () => set({ action: 'new' }) },
+        { label: 'Reset to suggested', onClick: () => set({ action: 'auto' }) },
+        { label: 'Back', onClick: () => this._queue() },
+      ],
+    });
   }
 
   async _outstanding() {
@@ -437,54 +530,5 @@ export class OrdersPage {
     }));
     Modal.open({ title: 'Receipts', body, width: '800px',
       buttons: [{ label: 'Close', onClick: Modal.close }] });
-  }
-
-  async _resolve(guid, upc) {
-    const base = `/api/orders/${encodeURIComponent(guid)}/items/${encodeURIComponent(upc)}`;
-    let d;
-    try { d = await API.get(`${base}/candidates`); } catch (e) { return Toast.error(e.message); }
-    const w = d.webami, c = d.items;
-    const body = document.createElement('div');
-    body.innerHTML = `
-      <div>${esc(w.title)} — ${esc(w.artist || w.vendor || '')}</div>
-      <div class="muted">${esc(w.product_type || '')} · UPC ${esc(upc)} · cost ${w.price != null ? Fmt.price(w.price) : '—'}</div>
-      <div class="form-grid" style="margin-top:12px">
-        <div class="input-group"><label class="input-label">Product title</label>
-          <input class="input" name="title" value="${esc(w.suggested.title)}"></div>
-        <div class="input-group"><label class="input-label">Variant title</label>
-          <input class="input" name="vtitle" value="${esc(w.vtitle)}"></div>
-      </div>
-      <label class="check-row"><input type="checkbox" name="upd"><span>Also update existing titles when mapping</span></label>
-      <div class="section-label">Closest Shopify products (${c.length})</div>
-      <div class="table-wrap modal-fit"><table class="variants-table">
-        <thead><tr><th>Product</th><th>Vendor</th><th>Variants</th><th></th></tr></thead>
-        <tbody>${c.length ? c.map((p, pi) => `<tr>
-          <td>${truncCell(p.title)}</td><td>${truncCell(p.vendor)}</td>
-          <td>${p.variants.map(v => `<div style="display:flex;gap:8px;align-items:center;margin:2px 0">
-            <span>${esc(v.title || '—')}</span><span class="muted mono">${esc(v.upc || 'no UPC')}</span>
-            <button class="btn btn-ghost btn-sm" data-map="${esc(v.variant_id)}" ${v.upc ? 'disabled' : ''}>Map to this</button></div>`).join('')}</td>
-          <td><button class="btn btn-ghost btn-sm" data-addv="${pi}">Add as new variant</button></td></tr>`).join('')
-          : '<tr><td colspan="4" class="empty-cell">No close matches</td></tr>'}</tbody></table></div>`;
-    const f = n => body.querySelector(`[name=${n}]`);
-    const titles = () => ({ title: f('title').value.trim(), vtitle: f('vtitle').value.trim() });
-    const go = async payload => {
-      try {
-        const r = await API.post(`${base}/resolve`, payload);
-        Modal.close();
-        r.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('Resolved');
-        this._openOrder(guid);
-      } catch (e) { Toast.error(e.message); }
-    };
-    body.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () =>
-      go({ action: 'map', variant_id: b.dataset.map, ...(f('upd').checked ? titles() : {}) })));
-    body.querySelectorAll('[data-addv]').forEach(b => b.addEventListener('click', () =>
-      go({ action: 'variant', product_id: c[+b.dataset.addv].product_id, vtitle: f('vtitle').value.trim() })));
-    Modal.open({
-      title: 'Resolve item', body, width: '96vw',
-      buttons: [
-        { label: 'Create new product', cls: 'btn-primary', onClick: () => go({ action: 'new', ...titles() }) },
-        { label: 'Cancel', onClick: Modal.close },
-      ],
-    });
   }
 }

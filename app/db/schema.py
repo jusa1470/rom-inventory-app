@@ -170,8 +170,13 @@ MIGRATIONS: list[str] = [
         reversed_at TEXT
     );
     CREATE TABLE receipt_queue (
-        order_guid TEXT NOT NULL, upc TEXT NOT NULL, qty INTEGER NOT NULL,
-        PRIMARY KEY (order_guid, upc)
+        order_guid          TEXT NOT NULL, 
+        upc                 TEXT NOT NULL, 
+        qty                 INTEGER NOT NULL,
+        PRIMARY             KEY (order_guid, upc),
+        action              TEXT,
+        variant_id          TEXT,
+        product_id          TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);
