@@ -24,7 +24,8 @@ _ATTRS = [
     "Digital Download Card", "Mask Cover", "Bonus Tracks", "Bonus Track", "Added Track",
     "Bonus LP", "Bonus CD", "Bonus 7-Inch", "Poster", "Lithograph", "Sticker", "Stickers",
     "Signed Polaroid", "Signed Postcard", "Signed", "Alternative Cover", "Alternate Artwork",
-    "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Photo / Photo Card"
+    "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Photo / Photo Card",
+    "Calendar"
 ]
 _COLOR_WORDS = [
     "black", "white", "red", "blue", "green", "yellow", "pink", "orange", "purple", "gold",

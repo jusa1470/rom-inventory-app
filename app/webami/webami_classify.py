@@ -38,11 +38,13 @@ def kw_eval(p: dict, w: dict) -> tuple[list[str], list[str]]:
 
 _ORD = re.compile(r"\b(\d+(?:st|nd|rd|th)|\d+\s+year)\s+anniversary(\s+edition)?\b", re.I)
 _FINISH = {"splatter", "marble", "marbled", "swirl", "smoke", "smoky", "glitter", "metallic",
-           "opaque", "translucent", "transparent", "milky", "neon", "pastel", "crystal"}
+           "opaque", "translucent", "transparent", "milky", "neon", "pastel", "crystal",
+           "galaxy", "coke bottle"}
 _CV = {x for c in _COLOR_WORDS for x in c.split()} | {"&", "and"}
 _COUNTRY = {"united kingdom": "UK", "united states": "US", "europe": "EU", "japan": "Japan"}
 _ALIAS = {"iex": "Indie Exclusive", "ie": "Indie Exclusive"}
 _SKIP_BR = re.compile(r"explicit|soundtrack|\bost\b|\bvol\b|\bpart\b|\bfeat", re.I)
+_EXP = re.compile(r"[\[\(]?\s*explicit(?:\s+(?:content|cover|lyrics|version|artwork))*\s*[\]\)]?", re.I)
 
 
 def _cap(s: str) -> str:
@@ -76,16 +78,34 @@ def _desc_color(d: str):
     return None, False
 
 
-def _join(cols: list[str]):
-    toks = [re.sub(r"\s*vinyl$", "", x, flags=re.I).strip() for x in cols]
+def _join(cols: list[str], hint: str = ""):
+    eco = any("ecorecord" in x.lower() for x in cols)
+    toks = [re.sub(r"(?i)\s*vinyl$", "", re.sub(r"(?i)\s*ecorecord\s*", " ", x)).strip() for x in cols]
+    toks = [x for x in toks if x]
+    hw = [w for w in re.split(r"[\s+&/]+", re.sub(r"(?i)\bvinyl\b", "", hint)) if w]
     fin = [x for x in toks if x.lower() in _FINISH]
+    have = {x.lower() for x in fin}
+    fin += [w for w in hw if w.lower() in _FINISH and w.lower() not in have]
+    fin.sort(key=lambda x: next((i for i, w in enumerate(hw) if w.lower() == x.lower()), 99))
     base = [x for x in toks if x.lower() not in _FINISH]
-    return " ".join(x for x in (" & ".join(base), *fin) if x) or None
+    ws = lambda x: set(x.lower().split())
+    base = [x for i, x in enumerate(base) if not any(
+        ws(x) < ws(y) or (ws(x) == ws(y) and j < i) for j, y in enumerate(base) if j != i)]
+    jb = ", ".join(base[:-1]) + " & " + base[-1] if len(base) > 2 else " & ".join(base)
+    if eco:
+        base = [x for x in base if x.lower() != "clear"]
+    res = " ".join(x for x in (jb, *fin) if x)
+    if eco:
+        return (res + " EcoRecord").strip()
+    return res or None
 
 
 def suggest_parts(w: dict) -> dict:
     """Suggested product title, edition, color, attributes from a WebAMI product."""
-    t, d = w.get("title") or "", w.get("description") or ""
+    t = _EXP.sub(" ", w.get("title") or "")
+    d = _EXP.sub(" ", w.get("description") or "")
+    ft = _EXP.sub(" ", w.get("features") or "")
+    hint = ""
     parts = re.split(r"\s+-\s+", re.sub(r"[\[\(][^\]\)]*[\]\)]", " ", t), maxsplit=1)
     base = re.sub(r"\s+", " ", parts[0]).strip()
     tail = parts[1].strip() if len(parts) > 1 else ""
@@ -139,6 +159,9 @@ def suggest_parts(w: dict) -> dict:
         if n in ("anniversary", "anniversary edition"):
             st["gen"] = f
             return
+        if n in ("ep", "extended play"):
+            addat("Extended Play")
+            return
         if n in _ED_SET or n.endswith("exclusive"):
             ed.append(f)
             return
@@ -153,8 +176,13 @@ def suggest_parts(w: dict) -> dict:
 
     # 1. title: brackets, " - tail", inline color before "Vinyl"
     for b in re.findall(r"[\[\(]([^\]\)]+)[\]\)]", t):
-        if not _SKIP_BR.search(b):
-            take(b, True)
+        if _SKIP_BR.search(b):
+            continue
+        b2 = re.sub(r"(?i)\b(vinyl|lp)\b", "", b).strip()
+        if b2 and all(x.lower() in _CV for x in re.split(r"[\s+/]+", b2) if x):
+            hint += " " + b2
+            continue
+        take(b, True)
     tc = None
     if tail:
         if norm(tail) in _ED_SET or _ORD.search(tail):
@@ -172,7 +200,7 @@ def suggest_parts(w: dict) -> dict:
         base = " ".join(ws[:-k] if k else ws)
 
     # 2. features field
-    for c in re.split(r"[;,/]", re.sub(r"^\(|\)$", "", (w.get("features") or "").strip())):
+    for c in re.split(r"[;,/]", re.sub(r"^\(|\)$", "", ft.strip())):
         take(c)
 
     # 3. description: editions and colors only (plus a few attribute patterns below)
@@ -190,7 +218,7 @@ def suggest_parts(w: dict) -> dict:
 
     # color
     nb = lambda x: None if not x or x.lower() == "black" else x
-    fcol = nb(_join(cols))
+    fcol = nb(_join(cols, hint))
     dcol, bio = _desc_color(d)
     dcol = nb(dcol)
     use_d = False
@@ -202,6 +230,13 @@ def suggest_parts(w: dict) -> dict:
         c = fcol
     else:
         c, use_d = dcol, True
+    hc = nb(re.sub(r"\s+", " ", re.sub(r"\s*\+\s*", " & ", hint)).strip())
+    if hc:
+        cw = {x.lower() for x in (c or "").split() if x != "&"}
+        if not cw or cw <= {x.lower() for x in hc.split() if x != "&"}:
+            c = hc
+    if c:
+        c = re.sub(r"(?i)\s+and\s+", " & ", c)
     if st["pic"]:
         color = "Zoetrope Picture Disc Vinyl" if re.search("zoetrope", t + d, re.I) \
             else "Picture Disc Vinyl"
@@ -214,6 +249,7 @@ def suggest_parts(w: dict) -> dict:
     ann = st["anniv"]
     seen: set[str] = set()
     ed = [x for x in ed if not (norm(x) in seen or seen.add(norm(x)))]
+    ed = [x for x in ed if not any(x is not y and f" {norm(x)} " in f" {norm(y)} " for y in ed)]
     ex = [x for x in ed if re.search(r"exclusive|^rsd", x, re.I)]
     rest = [x for x in ed if x not in ex]
     nr = [norm(x) for x in rest]

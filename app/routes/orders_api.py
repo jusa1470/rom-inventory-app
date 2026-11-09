@@ -27,6 +27,7 @@ class QtyIn(BaseModel):
 
 class Push(BaseModel):
     cost_keys: list[str] = []
+    title_keys: list[str] = []
     keys: list[str] | None = None
 
 
@@ -119,7 +120,7 @@ def _view(r: dict) -> dict:
     elif pl.get("product_id"):
         p = db.get_product_detail(pl["product_id"])
         pl["product_title"] = p["title"] if p else None
-    if pl["action"] in ("variant", "new") and r["wp_id"]:
+    if r["wp_id"]:
         wp = db.get_webami_product_by_id(r["wp_id"])
         if wp:
             s = db.suggest_parts(wp)
@@ -127,7 +128,7 @@ def _view(r: dict) -> dict:
     return pl
 
 
-def _apply(client, cfg, r: dict, pl: dict, cost: float | None):
+def _apply(client, cfg, r: dict, pl: dict, cost: float | None, titles: bool = False):
     guid, upc, qty = r["order_guid"], r["upc"], r["qty"]
     if pl["action"] in ("update", "map"):
         v = db.get_variant(pl["variant_id"])
