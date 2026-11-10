@@ -10,8 +10,9 @@ router = APIRouter(
 
 @router.get("")
 def list_matches(q: str | None = None, page: int = Query(1, ge=1),
-                 per_page: int = Query(25, ge=1, le=100), only_suggested: bool = False):
-    res = db.list_unmatched_variants(page, per_page, q.strip() if q else "", only_suggested)
+                 per_page: int = Query(25, ge=1, le=100), only_suggested: bool = False,
+                 identical: bool = False):
+    res = db.list_unmatched_variants(page, per_page, q.strip() if q else "", only_suggested, identical)
     return {**res, "page": page, "per_page": per_page}
 
 

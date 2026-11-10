@@ -40,11 +40,30 @@ _ORD = re.compile(r"\b(\d+(?:st|nd|rd|th)|\d+\s+year)\s+anniversary(\s+edition)?
 _FINISH = {"audiophile", "galaxy", "splatter", "marble", "marbled", "swirl", "smoke", "smoky", 
            "glitter", "metallic", "opaque", "translucent", "transparent", "milky", "neon", 
            "pastel", "crystal", "coke bottle"}
-_CV = {x for c in _COLOR_WORDS for x in c.split()} | {"&", "and"}
-_COUNTRY = {"united kingdom": "UK", "united states": "US", "europe": "EU", "japan": "Japan"}
+_CV = {x for c in _COLOR_WORDS for x in c.split()} | {"&", "and", "half"}
+_COUNTRY = {
+    "united kingdom": "UK", "uk": "UK", "great britain": "UK", "england": "UK",
+    "united states": "US", "usa": "US", "us": "US",
+    "europe": "EU", "european union": "EU", "eu": "EU",
+    "japan": "Japan", "germany": "Germany", "france": "France", "italy": "Italy",
+    "spain": "Spain", "netherlands": "Netherlands", "holland": "Netherlands",
+    "sweden": "Sweden", "norway": "Norway", "denmark": "Denmark", "finland": "Finland",
+    "canada": "Canada", "australia": "Australia", "new zealand": "New Zealand",
+    "mexico": "Mexico", "brazil": "Brazil", "argentina": "Argentina",
+    "korea": "Korea", "south korea": "Korea", "china": "China", "russia": "Russia",
+    "ireland": "Ireland", "poland": "Poland", "portugal": "Portugal",
+    "belgium": "Belgium", "austria": "Austria", "switzerland": "Switzerland",
+    "india": "India", "south africa": "South Africa", "jamaica": "Jamaica",
+}
 _ALIAS = {"iex": "Indie Exclusive", "ie": "Indie Exclusive"}
-_SKIP_BR = re.compile(r"explicit|soundtrack|\bost\b|\bvol\b|\bpart\b|\bfeat", re.I)
+_SKIP_BR = re.compile(r"explicit|soundtrack|\bost\b|\bvol\b|\bpart\b|\bfeat|colou?r[- ]in[- ]colou?r", re.I)
+_KEEP = re.compile(r"original\s+(?:\w+\s+){0,3}?(?:score|soundtrack|cast recording)", re.I)
+_HALF = re.compile(r"(?i)half\s+(\w+)\s*/\s*half\s+(\w+)")
 _EXP = re.compile(r"[\[\(]?\s*explicit(?:\s+(?:content|cover|lyrics|version|artwork))*\s*[\]\)]?", re.I)
+_GENERIC = re.compile(
+    r"^(?:the\s+)?(?:very\s+|ultimate\s+|absolute\s+)?(?:best(?:\s+of)?|greatest\s+hits|"
+    r"(?:#?\d+\s+)?(?:number\s+ones?(?:\s+hits)?|hits)|essential|definitive|collection|"
+    r"anthology|singles|gold|live)(?:\s+(?:vol(?:ume)?\.?\s*)?\d+)?$", re.I)
 
 
 def _cap(s: str) -> str:
@@ -72,7 +91,7 @@ def _desc_color(d: str):
         if ws:
             return " ".join(ws), True
     for m in re.finditer(r"((?:[A-Za-z&\-]+\s+){1,5})vinyl\b", d, re.I):
-        ws = _suffix([x for x in m.group(1).split() if x.lower() != "colored"])
+        ws = _suffix([x for x in m.group(1).split() if x.lower() not in ("colored", "coloured", "color", "colour")])
         if ws:
             return " ".join(ws), False
     return None, False
@@ -103,14 +122,14 @@ def _join(cols: list[str], hint: str = ""):
 def suggest_parts(w: dict) -> dict:
     """Suggested product title, edition, color, attributes from a WebAMI product."""
     _XP = r"(?i)explicit\s+(?:content|cover|lyrics|version|artwork)(?:\s*/\s*(?:content|cover|lyrics|version|artwork))*"
-    t = _EXP.sub(" ", re.sub(_XP, " ", w.get("title") or ""))
-    d = _EXP.sub(" ", re.sub(_XP, " ", w.get("description") or ""))
-    ft = _EXP.sub(" ", re.sub(_XP, " ", w.get("features") or ""))
+    cl = lambda s: _HALF.sub(r"Half \1 & Half \2", _EXP.sub(" ", re.sub(_XP, " ", s or "")))
+    t, d, ft = cl(w.get("title")), cl(w.get("description")), cl(w.get("features"))
     hint = ""
     parts = re.split(r"\s+-\s+", re.sub(r"[\[\(][^\]\)]*[\]\)]", " ", t), maxsplit=1)
     base = re.sub(r"\s+", " ", parts[0]).strip()
     tail = parts[1].strip() if len(parts) > 1 else ""
     ed: list[str] = []
+    unk: list[str] = []
     at: list[str] = []
     cols: list[str] = []
     st = {"imp": False, "cc": None, "col": False, "pic": False, "wt": None,
@@ -145,7 +164,7 @@ def suggest_parts(w: dict) -> dict:
         if re.search(r"\d+\s*lp\s*\+\s*7\b", f, re.I):
             addat("Bonus 7-inch Vinyl")
             return
-        m = re.match(r"(\d{3})\s?(?:g|gm|gram)\b", f, re.I)
+        m = re.match(r"(\d{3})[\s-]?(?:g|gm|grams?)\b", f, re.I)
         if m:
             st["wt"] = st["wt"] or f"{m.group(1)}g"
             return
@@ -176,10 +195,16 @@ def suggest_parts(w: dict) -> dict:
             cols.append(f)
             return
         if raw:
-            ed.append(f)
+            unk.append(f)
 
     # 1. title: brackets, " - tail", inline color before "Vinyl"
+    if re.search(r"(?i)\s+(?:ep|extended play)$", base):
+        base = re.sub(r"(?i)\s+(?:ep|extended play)$", "", base)
+        addat("Extended Play")
     for b in re.findall(r"[\[\(]([^\]\)]+)[\]\)]", t):
+        if _KEEP.match(b.strip()):
+            base = f"{base} ({b.strip()})"
+            continue
         if _SKIP_BR.search(b):
             continue
         b2 = re.sub(r"(?i)\b(vinyl|lp)\b", "", b).strip()
@@ -207,6 +232,12 @@ def suggest_parts(w: dict) -> dict:
     # 2. features field
     for c in re.split(r"[;,/]", re.sub(r"^\(|\)$", "", ft.strip())):
         take(c)
+    cn = []
+    for x in unk:
+        if not re.search(r"\d|edition|remaster|reissue|series|version", x, re.I) and (cols or st["col"]):
+            cn.append(x)
+        else:
+            ed.append(x)
 
     # 3. description: editions and colors only (plus a few attribute patterns below)
     if not st["anniv"]:
@@ -240,6 +271,8 @@ def suggest_parts(w: dict) -> dict:
         cw = {x.lower() for x in (c or "").split() if x != "&"}
         if not cw or cw <= {x.lower() for x in hc.split() if x != "&"}:
             c = hc
+    if cn:
+        c = " ".join(cn + ([c] if c else []))
     if c:
         c = re.sub(r"(?i)\s+and\s+", " & ", c)
     if st["pic"]:
@@ -273,7 +306,7 @@ def suggest_parts(w: dict) -> dict:
     edition = " - ".join(head + ex) or "Standard"
 
     # attributes
-    m = re.search(r"\b(\d{3})\s?(?:g|gm|gram)\b", d, re.I)
+    m = re.search(r"\b(\d{3})[\s-]?(?:g|gm|grams?)\b", d, re.I)
     wt = st["wt"] or (f"{m.group(1)}g" if m else None)
     m = re.search(r"\b(\d)\s*-?\s*x?\s*lp\b|\b(double|triple)\b(?:\s+\w+){0,3}?\s+(?:vinyl|lp)\b",
                   d, re.I)
@@ -290,6 +323,9 @@ def suggest_parts(w: dict) -> dict:
         extra.append("Laser Etched")
     imp = ([f"Import ({st['cc']})" if st["cc"] else "Import"] if st["imp"] else [])
     attrs = ([wt] if wt else []) + ([f"{n}Lp's"] if n >= 2 else []) + at + extra + imp
+    art = (w.get("artist") or "").strip()
+    if art and _GENERIC.match(base.strip()) and norm(art) not in norm(base):
+        base = f"{base} - {art}"
 
     return {"title": base, "edition": edition, "color": color,
             "attributes": ", ".join(attrs) or "None"}

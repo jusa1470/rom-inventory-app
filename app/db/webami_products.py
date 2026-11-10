@@ -183,8 +183,32 @@ def _decorate_page(items: list[dict]) -> list[dict]:
     return items
 
 
+def _vt(sg: dict) -> str:
+    none = lambda x: not x or x.lower() == "none"
+    return " | ".join(x for x in (
+        sg.get("edition") or "Standard",
+        None if none(sg.get("color")) else sg["color"],
+        None if none(sg.get("attributes")) else sg["attributes"]) if x)
+
+
+def is_identical(p: dict) -> bool:
+    if not p["suggestions"]:
+        return False
+    s = p["suggestions"][0]
+    sg = s["suggested"]
+    n = lambda v: str(v or "").strip().lower()
+    try:
+        cost_ok = round(float(p["cost"]), 2) == round(float(s["price"]), 2)
+    except (TypeError, ValueError):
+        return False
+    return (cost_ok and n(p["title"]) == n(sg["title"])
+            and n(p["variant_title"]) == n(_vt(sg))
+            and bool(s["artist_match"])
+            and format_ok(p.get("type") or p.get("product_type"), s["product_type"]))
+
+
 def list_unmatched_variants(page: int = 1, per_page: int = 25, q: str = "",
-                            only_suggested: bool = False) -> dict:
+                            only_suggested: bool = False, identical: bool = False) -> dict:
     conn = get_conn()
     where = ("(v.upc IS NULL OR v.upc='') "
              "AND COALESCE(p.type, p.product_type) IN ('Vinyl','CD','Cassette') "
@@ -213,13 +237,15 @@ def list_unmatched_variants(page: int = 1, per_page: int = 25, q: str = "",
         p["suggestions"] = c[:5]
         return p
 
-    if only_suggested:
+    if only_suggested or identical:
         key = _cache_key(q)
         if _cache["key"] != key:
             _cache["data"] = [p for p in map(enrich, rows(conn.execute(sel, params).fetchall()))
                               if p["suggestions"]]
             _cache["key"] = key
         allp = _cache["data"]
+        if identical:
+            allp = [p for p in allp if is_identical(p)]
         return {"items": _decorate_page(allp[(max(page, 1) - 1) * per_page:][:per_page]), "total": len(allp)}
     total = conn.execute(
         "SELECT COUNT(*) FROM shopify_variants v JOIN shopify_products p "

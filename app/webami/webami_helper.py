@@ -34,7 +34,7 @@ _COLOR_WORDS = [
     "tangerine", "apricot", "raspberry", "grape", "rust", "amber", "jade", "ruby", "emerald",
     "cobalt", "iris", "hazel", "denim", "clear", "opaque", "translucent", "transparent",
     "metallic", "glitter", "glow in the dark", "marbled", "marble", "splatter", "swirl",
-    "split", "half-half", "solid", "smoky", "smoke", "crystal", "pearls", "pearl", "milky",
+    "split", "half-half", "solid", "smoky", "smoke", "crystal clear", "crystal", "pearls", "pearl", "milky",
     "pastel", "neon", "bright", "dark", "light", "deep", "baby", "ultra", "electric",
     "multi-colored", "mixed", "colored", "tie dye", "galaxy", "rainbow", "coke bottle",
     "apple", "flame", "seablue", "sea", "sky", "canary", "bone", "bubblegum", "splash",

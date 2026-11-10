@@ -4,6 +4,7 @@ from app.db.artists import (
     remove_alias, set_ignored, vendor_changes
 )
 from app.db.connection import get_conn, transaction
+from app.db.missing import list_missing
 from app.db.prices import (
     get_price_variants, save_price_check, resolve_price_check, list_price_changes,
     price_queue_add, price_queue_remove, price_queue_filtered, price_queue_set, list_price_queue,
@@ -45,6 +46,9 @@ __all__: list[str] = [
     
     # Connection functions
     "get_conn", "transaction",
+
+    # Missing data functions
+    "list_missing",
     
     # Price functions
     "get_price_variants", "save_price_check", "resolve_price_check", "list_price_changes",

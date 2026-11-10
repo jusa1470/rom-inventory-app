@@ -1,15 +1,37 @@
 import { API } from "../api.js";
 import { Modal } from "../components/modal.js";
 import { Toast } from "../components/toast.js";
-import { buildPager, debounce, esc, Fmt, thumb, truncCell } from "../util.js";
+import { buildPager, debounce, esc, Fmt, thumb, truncCell, variantTitle } from "../util.js";
 
 const UPC_LEVEL = "variant";
+const nz = (v) => String(v ?? "").trim().toLowerCase();
+const same = (p, s) => {
+  if (!s) return false;
+  const sg = s.suggested;
+  const vt = variantTitle(sg.edition, sg.color, sg.attributes);
+  const chk = {
+    cost: p.cost != null && s.price != null && (+p.cost).toFixed(2) === (+s.price).toFixed(2),
+    title: nz(p.title) === nz(sg.title),
+    variant: nz(p.variant_title) === nz(vt),
+    artist: !!s.artist_match,
+    type: fmtOk(p.type || p.product_type, s.product_type),
+  };
+  return Object.values(chk).every(Boolean);
+};
+const fmtOk = (t, f) => {
+  t = nz(t); f = nz(f);
+  if (t === "vinyl") return /lp|vinyl|single/.test(f);
+  if (t === "cd") return f === "cd";
+  if (t === "cassette") return f.includes("cassette");
+  return t === f;
+};
 
 export class MatchesPage {
   constructor() {
     this.page = 1;
     this.q = "";
-    this.only = false;
+    this.only = true;
+    this.ident = false;
     this._request = 0;
   }
   destroy() {}
@@ -22,7 +44,9 @@ export class MatchesPage {
                 <div class="search-row">
                 <input class="input" id="m-search" placeholder="Search title or vendor…">
                 <label class="check-row" style="margin:0 0 0 12px">
-                    <input type="checkbox" id="m-only"><span>Only with suggestions</span></label>
+                    <input type="checkbox" id="m-only" checked><span>Only with suggestions</span></label>
+                      <label class="check-row" style="margin:0 0 0 12px">
+                        <input type="checkbox" id="m-ident"><span>Identical</span></label>
                 </div>
                 <div id="m-pager-top"></div>
                 <div class="table-wrap"><table class="cmp">
@@ -47,6 +71,11 @@ export class MatchesPage {
       this.page = 1;
       this._load();
     });
+    c.querySelector("#m-ident").addEventListener("change", (e) => {
+      this.ident = e.target.checked;
+      this.page = 1;
+      this._load();
+    });
     await this._load();
   }
 
@@ -62,6 +91,7 @@ export class MatchesPage {
       const params = new URLSearchParams({ page: this.page });
       if (this.q) params.set("q", this.q);
       if (this.only) params.set("only_suggested", "true");
+      if (this.ident) params.set("identical", "true");
       const data = await API.get(`/api/matches?${params}`);
       if (req !== this._request || !body.isConnected) return;
       this.items = data.items;
