@@ -37,9 +37,9 @@ def kw_eval(p: dict, w: dict) -> tuple[list[str], list[str]]:
 # ── edition / color / attributes suggestion ──────────────────────────
 
 _ORD = re.compile(r"\b(\d+(?:st|nd|rd|th)|\d+\s+year)\s+anniversary(\s+edition)?\b", re.I)
-_FINISH = {"splatter", "marble", "marbled", "swirl", "smoke", "smoky", "glitter", "metallic",
-           "opaque", "translucent", "transparent", "milky", "neon", "pastel", "crystal",
-           "galaxy", "coke bottle"}
+_FINISH = {"audiophile", "galaxy", "splatter", "marble", "marbled", "swirl", "smoke", "smoky", 
+           "glitter", "metallic", "opaque", "translucent", "transparent", "milky", "neon", 
+           "pastel", "crystal", "coke bottle"}
 _CV = {x for c in _COLOR_WORDS for x in c.split()} | {"&", "and"}
 _COUNTRY = {"united kingdom": "UK", "united states": "US", "europe": "EU", "japan": "Japan"}
 _ALIAS = {"iex": "Indie Exclusive", "ie": "Indie Exclusive"}
@@ -102,9 +102,10 @@ def _join(cols: list[str], hint: str = ""):
 
 def suggest_parts(w: dict) -> dict:
     """Suggested product title, edition, color, attributes from a WebAMI product."""
-    t = _EXP.sub(" ", w.get("title") or "")
-    d = _EXP.sub(" ", w.get("description") or "")
-    ft = _EXP.sub(" ", w.get("features") or "")
+    _XP = r"(?i)explicit\s+(?:content|cover|lyrics|version|artwork)(?:\s*/\s*(?:content|cover|lyrics|version|artwork))*"
+    t = _EXP.sub(" ", re.sub(_XP, " ", w.get("title") or ""))
+    d = _EXP.sub(" ", re.sub(_XP, " ", w.get("description") or ""))
+    ft = _EXP.sub(" ", re.sub(_XP, " ", w.get("features") or ""))
     hint = ""
     parts = re.split(r"\s+-\s+", re.sub(r"[\[\(][^\]\)]*[\]\)]", " ", t), maxsplit=1)
     base = re.sub(r"\s+", " ", parts[0]).strip()
@@ -127,7 +128,7 @@ def suggest_parts(w: dict) -> dict:
     def take(f, raw=False):
         f = f.strip()
         n = norm(f)
-        if not n or re.search(r"explicit|parental|oversize|recyclable", f, re.I):
+        if not n or re.search(r"explicit|parental|oversize|recyclable|^content$|^cover$", f, re.I):
             return
         if n in ("colored vinyl", "coloured vinyl"):
             st["col"] = True
@@ -140,6 +141,9 @@ def suggest_parts(w: dict) -> dict:
             st["imp"] = True
             if m and m.group(1).strip():
                 st["cc"] = _COUNTRY.get(norm(m.group(1)), m.group(1).strip())
+            return
+        if re.search(r"\d+\s*lp\s*\+\s*7\b", f, re.I):
+            addat("Bonus 7-inch Vinyl")
             return
         m = re.match(r"(\d{3})\s?(?:g|gm|gram)\b", f, re.I)
         if m:
@@ -179,8 +183,9 @@ def suggest_parts(w: dict) -> dict:
         if _SKIP_BR.search(b):
             continue
         b2 = re.sub(r"(?i)\b(vinyl|lp)\b", "", b).strip()
-        if b2 and all(x.lower() in _CV for x in re.split(r"[\s+/]+", b2) if x):
-            hint += " " + b2
+        if b2 != b.strip():
+            if b2 and all(x.lower() in _CV for x in re.split(r"[\s+/]+", b2) if x):
+                hint += " " + b2
             continue
         take(b, True)
     tc = None
@@ -248,8 +253,11 @@ def suggest_parts(w: dict) -> dict:
     # edition
     ann = st["anniv"]
     seen: set[str] = set()
+    if c:
+        ed = [re.sub(rf"(?i)\s+{re.escape(c)}$", "", x) or x for x in ed]
     ed = [x for x in ed if not (norm(x) in seen or seen.add(norm(x)))]
-    ed = [x for x in ed if not any(x is not y and f" {norm(x)} " in f" {norm(y)} " for y in ed)]
+    k = lambda x: norm(x).replace("remastered", "remaster")
+    ed = [x for x in ed if not any(x is not y and f" {k(x)} " in f" {k(y)} " for y in ed)]
     ex = [x for x in ed if re.search(r"exclusive|^rsd", x, re.I)]
     rest = [x for x in ed if x not in ex]
     nr = [norm(x) for x in rest]
