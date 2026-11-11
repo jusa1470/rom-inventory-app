@@ -260,3 +260,25 @@ mutation VariantsDelete($productId: ID!, $variantsIds: [ID!]!) {
   }
 }
 """
+
+Q_PUBLICATIONS: str = "query { publications(first: 20) { nodes { id app { title } } } }"
+
+Q_VARIANT_PUBS: str = """
+query($id: ID!) {
+  productVariant(id: $id) {
+    resourcePublications(first: 20) { nodes { isPublished publication { id app { title } } } }
+  }
+}
+"""
+
+M_PUBLISH: str = """
+mutation Pub($id: ID!, $input: [PublicationInput!]!) {
+  publishablePublish(id: $id, input: $input) { userErrors { field message } }
+}
+"""
+
+M_UNPUBLISH: str = """
+mutation Unpub($id: ID!, $input: [PublicationInput!]!) {
+  publishableUnpublish(id: $id, input: $input) { userErrors { field message } }
+}
+"""

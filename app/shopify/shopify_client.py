@@ -16,13 +16,17 @@ from app.shopify.queries import (
     M_PRODUCT_CREATE,
     M_PRODUCT_DELETE,
     M_PRODUCT_UPDATE,
+    M_PUBLISH,
+    M_UNPUBLISH,
     M_VARIANT_MEDIA,
     M_VARIANTS_CREATE,
     M_VARIANTS_DELETE,
     M_VARIANTS_UPDATE,
     Q_BULK_STATUS,
     Q_PRODUCT_OPTIONS,
+    Q_PUBLICATIONS,
     Q_TAXONOMY,
+    Q_VARIANT_PUBS,
     bulk_products_query,
     Q_LOCATIONS,
     Q_MORE_VARIANTS,
@@ -327,6 +331,44 @@ class ShopifyClient:
         if errs:
             raise RuntimeError(f"variantsDelete: {errs}")
 
+    def variant_channels(self, variant_id: str) -> list[str]:
+        d = self.gql(Q_VARIANT_PUBS,
+                     {"id": f"gid://shopify/ProductVariant/{variant_id}"}).get("productVariant") or {}
+        out = []
+        for n in (d.get("resourcePublications") or {}).get("nodes", []):
+            if n.get("isPublished"):
+                pub = n["publication"]
+                out.append((pub.get("catalog") or {}).get("title") or pub["id"].rsplit("/", 1)[-1])
+        return out
+
+    @staticmethod
+    def _cname(pub: dict) -> str:
+        return (pub.get("app") or {}).get("title") or pub["id"].rsplit("/", 1)[-1]
+
+    def list_channels(self) -> list[dict]:
+        nodes = (self.gql(Q_PUBLICATIONS).get("publications") or {}).get("nodes", [])
+        return [{"id": n["id"], "name": self._cname(n)} for n in nodes]
+
+    def variant_channels(self, variant_id: str) -> list[dict]:
+        d = self.gql(Q_VARIANT_PUBS,
+                     {"id": f"gid://shopify/ProductVariant/{variant_id}"}).get("productVariant") or {}
+        return [{"id": n["publication"]["id"], "name": self._cname(n["publication"])}
+                for n in (d.get("resourcePublications") or {}).get("nodes", [])
+                if n.get("isPublished")]
+
+    def set_variant_channels(self, variant_id: str, ids: list[str]) -> None:
+        gid = f"gid://shopify/ProductVariant/{variant_id}"
+        cur = {c["id"] for c in self.variant_channels(variant_id)}
+        want = set(ids)
+        for mut, key, s in ((M_PUBLISH, "publishablePublish", want - cur),
+                            (M_UNPUBLISH, "publishableUnpublish", cur - want)):
+            if not s:
+                continue
+            data = self.gql(mut, {"id": gid, "input": [{"publicationId": i} for i in s]})
+            errs = (data.get(key) or {}).get("userErrors")
+            if errs:
+                raise RuntimeError(f"{key}: {errs}")
+
     def _option_names(self, product_id: str) -> list[str]:
         data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
         return [o["name"] for o in (data.get("product") or {}).get("options", [])]
@@ -415,11 +457,15 @@ class ShopifyClient:
                 inv["measurement"] = {"weight": {"value": f["weight"], "unit": "POUNDS"}}
             if inv:
                 v["inventoryItem"] = inv
+            if f.get("image_url") and not f.get("media_id"):
+                v["mediaSrc"] = [f["image_url"]]
             title = (f.get("title") or "Standard").strip()
             parts = [title] if len(options) == 1 else [s.strip() for s in title.split(" / ")]
             if len(parts) != len(options):
                 raise RuntimeError(f"Variant title needs {len(options)} part(s) separated by ' / '")
             v["optionValues"] = [{"optionName": o, "name": n} for o, n in zip(options, parts)]
+            if f.get("image_url"):
+                v["mediaSrc"] = [f["image_url"]]
             mfs = _mfs(f, BULK_VARIANT_MF, cfg)
             if mfs:
                 v["metafields"] = mfs
@@ -434,7 +480,8 @@ class ShopifyClient:
         if res.get("userErrors"):
             raise RuntimeError(f"variantsCreate: {res['userErrors']}")
         links = [{"variantId": n["id"], "mediaIds": [f"gid://shopify/MediaImage/{f['media_id']}"]}
-                 for n, f in zip(res["productVariants"], variants) if f.get("media_id")]
+                for n, f in zip(res["productVariants"], variants)
+                if f.get("media_id") and not f.get("image_url")]
         if links:
             r = self.gql(M_VARIANT_MEDIA, {
                 "productId": f"gid://shopify/Product/{product_id}", "variantMedia": links})

@@ -119,7 +119,7 @@ export class ProductsPage {
 
     this.c
       .querySelector("#p-new")
-      .addEventListener("click", () => this._openEdit());
+      .addEventListener("click", () => this._openNew());
     this.c.querySelector("#p-search").addEventListener(
       "input",
       debounce((e) => {
@@ -129,6 +129,93 @@ export class ProductsPage {
       }),
     );
     await this._load();
+  }
+
+  _openNew() {
+    const body = document.createElement("div");
+    body.innerHTML = `
+      <div class="input-group">
+        <label class="input-label">Create by UPC</label>
+        <div style="display:flex;gap:8px">
+          <input class="input" name="upc" placeholder="UPC (comma separate for multiple)">
+          <button type="button" class="btn btn-primary" id="n-look">Look up</button>
+        </div>
+      </div>
+      <div id="n-res" style="margin-top:12px"></div>`;
+    const res = body.querySelector("#n-res");
+    const look = async () => {
+      const upc = body.querySelector("[name=upc]").value.trim();
+      if (!upc) return Toast.error("UPC required");
+      const upcs = [...new Set(upc.split(/[,\s]+/).filter(Boolean))];
+      if (upcs.length > 1) return this._runQueue(upcs);
+      res.innerHTML = '<span class="spinner"></span>Looking up…';
+      try {
+        const r = await API.get(`/api/products/by-upc/${encodeURIComponent(upc)}`);
+        const pf = r.prefill || { product: {}, variant: {} }, ve = r.variant_exists, pe = r.product_exists;
+        const msg = ve
+          ? `Variant already exists on "${ve.product_title}" (${ve.title || "—"})`
+          : pe ? `Product "${pe.title}" exists, this variant doesn't`
+          : "Not in Shopify";
+        res.innerHTML = `
+          <div>${esc(r.webami_title)}</div>
+          <div class="muted">${esc(pf.product.vendor || "")}</div>
+          <span class="badge ${ve || pe ? "badge-used" : "badge-new"}" style="margin-top:8px">${esc(msg)}</span>
+          <div class="modal-footer" style="margin-top:12px"></div>`;
+        const box = res.querySelector(".modal-footer");
+        const add = (label, cls, fn) => {
+          const b = document.createElement("button");
+          b.className = `btn ${cls}`;
+          b.textContent = label;
+          b.addEventListener("click", async () => {
+            try { await fn(); } catch (e) { Toast.error(e.message); }
+          });
+          box.appendChild(b);
+        };
+        const open = async (pid, vid, withProduct) => {
+          const p = await API.get(`/api/products/${encodeURIComponent(pid)}`);
+          this._openEdit(p, { ...pf, product: withProduct ? pf.product : {}, variantId: vid });
+        };
+        if (ve) add("Update existing variant", "btn-primary", () => open(ve.product_id, ve.variant_id, true));
+        else if (pe) {
+          add("Add variant to existing product", "btn-primary", () => open(pe.product_id, null, false));
+          add("Create separate product", "btn-ghost", () => this._openEdit(null, pf));
+        } else add("Create product", "btn-primary", () => this._openEdit(null, pf));
+      } catch (e) {
+        res.innerHTML = "";
+        Toast.error(e.message);
+      }
+    };
+    body.querySelector("#n-look").addEventListener("click", look);
+    body.querySelector("[name=upc]").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") look();
+    });
+    Modal.open({
+      title: "New product",
+      body,
+      width: "720px",
+      buttons: [
+        { label: "Manual entry", onClick: () => this._openEdit() },
+        { label: "Cancel", onClick: Modal.close },
+      ],
+    });
+  }
+
+  async _runQueue(upcs) {
+    const u = upcs.shift();
+    if (!u) return Modal.close();
+    const next = () => this._runQueue(upcs);
+    try {
+      const r = await API.get(`/api/products/by-upc/${encodeURIComponent(u)}`);
+      const pf = r.prefill || { product: {}, variant: {} };
+      const ve = r.variant_exists, pe = r.product_exists;
+      if (ve || pe) {
+        const p = await API.get(`/api/products/${encodeURIComponent((ve || pe).product_id)}`);
+        this._openEdit(p, { ...pf, product: ve ? pf.product : {}, variantId: ve ? ve.variant_id : null }, next);
+      } else this._openEdit(null, pf, next);
+    } catch (e) {
+      Toast.error(`${u}: ${e.message}`);
+      next();
+    }
   }
 
   _buildHead(options) {
@@ -289,7 +376,10 @@ export class ProductsPage {
       Toast.error(e.message);
       return;
     }
-
+    let vch = {};
+    try {
+      vch = (await API.get(`/api/products/${encodeURIComponent(productId)}/variant-channels`)).items;
+    } catch (_) {}
     const item = (label, value) => `
       <div>
         <div class="input-label">${label}</div>
@@ -324,7 +414,7 @@ export class ProductsPage {
           <thead><tr>
             <th></th><th>Title</th><th>UPC</th>
             <th class="num">Price</th><th class="num">Cost</th><th class="num">Qty</th>
-            <th>Weight</th><th>Release date</th><th>Variant tags</th><th>Description</th>
+            <th>Channels</th><th>Weight</th><th>Release date</th><th>Variant tags</th><th>Description</th>
           </tr></thead>
           <tbody>
             ${p.variants
@@ -337,6 +427,7 @@ export class ProductsPage {
                 <td class="num">${Fmt.price(v.price)}</td>
                 <td class="num">${Fmt.price(v.cost)}</td>
                 <td class="num">${Fmt.qty(v.inventory_quantity)}</td>
+                <td>${truncCell((vch[v.variant_id] || []).join(", "))}</td>a
                 <td>${v.weight != null ? esc(`${v.weight} ${v.weight_unit || ""}`) : "—"}</td>
                 <td>${esc(v.release_date || "—")}</td>
                 <td>${truncCell(listText(v.variant_tags))}</td>
@@ -378,7 +469,7 @@ export class ProductsPage {
     });
   }
 
-  _openEdit(p) {
+  _openEdit(p, prefill, onSaved) {
     const isNew = !p;
     p = p || {
       title: "",
@@ -391,7 +482,7 @@ export class ProductsPage {
       release_date: "",
       genres: "",
       tags: "",
-      status: "DRAFT",
+      status: "ACTIVE",
       variants: [],
       images: [],
     };
@@ -433,6 +524,7 @@ export class ProductsPage {
         ];
       })(),
       ["upc", "UPC", v.upc],
+      ["image_url", "Image URL", v.variant_id ? "" : v.image_url],
       ["description", "Description", v.description],
       ["release_date", "Release date", v.release_date],
       ["variant_tags", "Variant tags", v.variant_tags],
@@ -449,6 +541,8 @@ export class ProductsPage {
       <div class="form-grid" data-vid="${esc(v.variant_id)}" data-iid="${esc(v.inventory_item_id)}" data-mid="${esc(v.media_id)}" data-barcode="${esc(v.barcode)}"
            style="margin-bottom:16px">
         ${VF(v).map((f) => inp(...f)).join("")}
+        <details class="vch" style="grid-column:1/-1"><summary class="input" style="display:flex;align-items:center;cursor:pointer">Channels…</summary>
+          <div class="vch-list" style="padding:8px 0"></div></details>
         ${v.variant_id ? `<button type="button" class="btn btn-danger btn-sm" data-delv="${esc(v.variant_id)}">Delete variant</button>` : ""}
       </div>`;
     const body = document.createElement("div");
@@ -492,6 +586,32 @@ export class ProductsPage {
           .querySelector("#variants")
           .insertAdjacentHTML("beforeend", vblock({})),
       );
+    body.querySelector("#addv").addEventListener("click", () => {
+      if (chs.length) fillCh([...body.querySelectorAll("[data-vid]")].pop());
+    });
+
+    let chs = [], vch = {};
+    const chSum = (row) => {
+      const n = row.querySelectorAll("[data-ch]:checked").length;
+      row.querySelector(".vch summary").textContent = `${n} of ${chs.length} channels`;
+    };
+    const fillCh = (row) => {
+      const vid = row.getAttribute("data-vid");
+      const cur = vid ? new Set((vch[vid] || []).map((c) => c.id)) : null;
+      row._orig = cur ? [...cur] : null;
+      row.querySelector(".vch-list").innerHTML = chs.map((c) => `
+        <label class="check-row" style="margin:0 0 6px"><input type="checkbox" data-ch="${esc(c.id)}" ${!cur || cur.has(c.id) ? "checked" : ""}><span>${esc(c.name)}</span></label>`).join("");
+      row.querySelectorAll("[data-ch]").forEach((i) => i.addEventListener("change", () => chSum(row)));
+      chSum(row);
+    };
+    Promise.all([
+      API.get("/api/products/channels"),
+      isNew ? { items: {} } : API.get(`/api/products/${encodeURIComponent(p.product_id)}/variant-channels`),
+    ]).then(([a, b]) => {
+      chs = a.items;
+      vch = b.items;
+      body.querySelectorAll("[data-vid]").forEach(fillCh);
+    }).catch((e) => Toast.error(e.message));
 
     const changed = (root) => {
       const out = {};
@@ -514,7 +634,10 @@ export class ProductsPage {
       const variants = [...body.querySelectorAll("[data-vid]")]
         .map((r) => {
           const f = changed(r);
-          if (!Object.keys(f).length) return null;
+          const ids = [...r.querySelectorAll("[data-ch]:checked")].map((c) => c.dataset.ch);
+          const chg = chs.length > 0 && (!r.getAttribute("data-vid") ||
+            chs.some((c) => (r._orig || []).includes(c.id) !== ids.includes(c.id)));
+          if (!Object.keys(f).length && !chg) return null;
           if ("edition" in f || "color" in f || "attributes" in f) {
             const g = (n) => r.querySelector(`[name="${n}"]`).value.trim();
             f.title = variantTitle(g("edition"), g("color"), g("attributes"));
@@ -529,6 +652,7 @@ export class ProductsPage {
           return {
             id: r.getAttribute("data-vid") ?? "",
             ...f,
+            ...(chg ? { channels: ids } : {}),
             ...("inventory_quantity" in f
               ? { inventory_item_id: r.getAttribute("data-iid") ?? "" }
               : {}),
@@ -557,6 +681,7 @@ export class ProductsPage {
         Modal.close();
         res.dry_run ? Toast.warning('Test mode: nothing written') : Toast.success('Saved to Shopify');
         this._load();
+        if (onSaved) onSaved();
       } catch (e) {
         Toast.error(e.message);
         btn.disabled = false;
@@ -583,6 +708,7 @@ export class ProductsPage {
         set("upc", c.upc || p.upc);
         set("description", c.description);
         set("release_date", c.release_date);
+        set("image_url", c.image_url);
         const old = p.variants[0];
         if (old) set("inventory_quantity", old.inventory_quantity);
         row.dataset.mid = old?.media_id || p.images?.[0]?.media_id || "";
@@ -599,6 +725,11 @@ export class ProductsPage {
         if (c.canon_artist) pf('vendor').value = c.canon_artist;
         if (c.genres && !pf('genres').value.trim())
           pf("genres").value = c.genres.split(",").join(", ");
+        const df = c.defaults || {};
+        if (df.type && !pf("type").value.trim()) pf("type").value = df.type;
+        if (df.product_type) pf("product_type").value = df.product_type;
+        if (df.category) pf("category").value = df.category;
+        if (df.tags && !pf("tags").value.trim()) pf("tags").value = df.tags;
         const slug = (x) =>
           String(x || "")
             .toLowerCase()
@@ -646,6 +777,26 @@ export class ProductsPage {
         pf2("type").value || pf2("product_type").value].map(slug).filter(Boolean).join("-");
         updNote();
       }));
+    
+    if (prefill) {
+      let row = prefill.variantId
+        ? [...body.querySelectorAll("[data-vid]")].find((r) => r.dataset.vid === prefill.variantId)
+        : null;
+      if (!row) {
+        if (!isNew && !needNew)
+          body.querySelector("#variants").insertAdjacentHTML("beforeend", vblock({}));
+        row = [...body.querySelectorAll("[data-vid]")].pop();
+      }
+      const put = (root, o) =>
+        Object.entries(o || {}).forEach(([k, v]) => {
+          const i = root.querySelector(`[name="${k}"]`);
+          if (i) i.value = v;
+        });
+      put(body.querySelector("#edit-product"), prefill.product || {});
+      put(row, prefill.variant || {});
+      if (prefill.product && prefill.product.title)
+        pf2("title").dispatchEvent(new Event("input"));
+    }
 
     Modal.open({
       title: isNew ? "New product" : `Edit: ${p.title}`,

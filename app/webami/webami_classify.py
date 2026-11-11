@@ -56,7 +56,7 @@ _COUNTRY = {
     "india": "India", "south africa": "South Africa", "jamaica": "Jamaica",
 }
 _ALIAS = {"iex": "Indie Exclusive", "ie": "Indie Exclusive"}
-_SKIP_BR = re.compile(r"explicit|soundtrack|\bost\b|\bvol\b|\bpart\b|\bfeat|colou?r[- ]in[- ]colou?r", re.I)
+_SKIP_BR = re.compile(r"explicit|soundtrack|\bost\b|\bvol\b|\bpart\b|\bfeat|^\s*rsd\s*$|colou?r[- ]in[- ]colou?r", re.I)
 _KEEP = re.compile(r"original\s+(?:\w+\s+){0,3}?(?:score|soundtrack|cast recording)", re.I)
 _HALF = re.compile(r"(?i)half\s+(\w+)\s*/\s*half\s+(\w+)")
 _EXP = re.compile(r"[\[\(]?\s*explicit(?:\s+(?:content|cover|lyrics|version|artwork))*\s*[\]\)]?", re.I)
@@ -76,6 +76,8 @@ def _suffix(words: list[str]) -> list[str]:
         if x.lower() not in _CV:
             break
         out.insert(0, x)
+    while out and out[0].lower() in ("and", "&"):
+        out.pop(0)
     return out
 
 
@@ -90,6 +92,11 @@ def _desc_color(d: str):
             ws.append(x)
         if ws:
             return " ".join(ws), True
+    m = re.search(r"((?:[A-Za-z&\-]+\s+){1,3})(?:double[- ]|triple[- ])?(?:lp|vinyl)\b[^.]*?pressing", d, re.I)
+    if m:
+        ws = _suffix([x for x in m.group(1).split() if x.lower() != "colored"])
+        if ws:
+            return " ".join(ws), False
     for m in re.finditer(r"((?:[A-Za-z&\-]+\s+){1,5})vinyl\b", d, re.I):
         ws = _suffix([x for x in m.group(1).split() if x.lower() not in ("colored", "coloured", "color", "colour")])
         if ws:
@@ -289,6 +296,8 @@ def suggest_parts(w: dict) -> dict:
     if c:
         ed = [re.sub(rf"(?i)\s+{re.escape(c)}$", "", x) or x for x in ed]
     ed = [x for x in ed if not (norm(x) in seen or seen.add(norm(x)))]
+    if ann or len(ed) > 1:
+        ed = [x for x in ed if norm(x) != "special edition"]
     k = lambda x: norm(x).replace("remastered", "remaster")
     ed = [x for x in ed if not any(x is not y and f" {k(x)} " in f" {k(y)} " for y in ed)]
     ex = [x for x in ed if re.search(r"exclusive|^rsd", x, re.I)]

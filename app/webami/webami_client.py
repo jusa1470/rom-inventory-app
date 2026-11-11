@@ -5,6 +5,7 @@ import re
 import threading
 from datetime import datetime
 import time
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -119,6 +120,30 @@ def _description(page: str):
     return _txt(BeautifulSoup(m.group(1), "lxml")) if m else None
 
 
+def _img(src):
+    return urljoin(config.WEBAMI_BASE_URL + "/", src) if src else None
+
+
+def _abs(u):
+    if not u:
+        return None
+    return u if u.startswith("http") else (
+        "https:" + u if u.startswith("//") else config.WEBAMI_BASE_URL.rstrip("/") + "/" + u.lstrip("/"))
+
+
+def _page_image(page: str):
+    full = BeautifulSoup(page, "lxml")
+    m = full.select_one('meta[property="og:image"], meta[name="og:image"], link[rel="image_src"]')
+    if m and (m.get("content") or m.get("href")):
+        return m.get("content") or m.get("href")
+    for i in full.select("img"):
+        s = i.get("src") or i.get("data-src") or i.get("data-original") or ""
+        if s and not re.search(r"logo|icon|sprite|blank|spacer|\.svg", s, re.I) \
+                and re.search(r"cover|product|image|upc|\d{8,}", s, re.I):
+            return s
+    return None
+
+
 def parse_product(page: str) -> dict:
     head = page.find('class="main-title')
     end = page.find('id="aec-product-description"')
@@ -155,8 +180,10 @@ def parse_product(page: str) -> dict:
         "genres": _genres(soup),
         "weight": _weight(_info(soup, "Weight"))[0],
         "weight_unit": _weight(_info(soup, "Weight"))[1],
-        "image_url": ((soup.select_one(".main-cover img") or {}).get("src")
-                      or (ld.get("image") or [None])[0]),
+        "image_url": _abs(
+            (soup.select_one(".main-cover img") or {}).get("src")
+            or (ld.get("image") or [None])[0]
+            or _page_image(page)),
     }
 
 

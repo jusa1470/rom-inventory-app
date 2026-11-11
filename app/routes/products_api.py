@@ -1,3 +1,4 @@
+import re as _re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +13,8 @@ from app.webami.webami_client import WebamiClient
 router = APIRouter(
     prefix="/api/products", tags=["products"], dependencies=[Depends(require_session)]
 )
+
+_FMT = {"lp": "Vinyl", "cd": "CD", "cassette": "Cassette"}
 
 
 class ProductIn(BaseModel):
@@ -42,11 +45,33 @@ class VariantIn(BaseModel):
     inventory_quantity: int | None = None
     weight: float | None = None
     barcode: str | None = None
+    image_url: str | None = None
+    channels: list[str] | None = None
 
 
 class ProductUpdate(BaseModel):
     product: ProductIn = ProductIn()
     variants: list[VariantIn] = []
+
+
+def _inch(fmt: str | None) -> str | None:
+    m = _re.search(r'\b(7|10)\s*(?:"|”|in\b|-?inch)', fmt or "", _re.I)
+    return f"{m.group(1)}-inch" if m and "single" in (fmt or "").lower() else None
+
+
+def _defaults(typ: str) -> dict:
+    if not typ:
+        return {}
+    c = db.get_conn()
+
+    def top(col):
+        r = c.execute(
+            f"SELECT {col} FROM shopify_products WHERE type=? AND {col} IS NOT NULL "
+            f"AND {col}!='' GROUP BY {col} ORDER BY COUNT(*) DESC LIMIT 1", (typ,)).fetchone()
+        return r[0] if r else None
+    d = {"type": typ, "product_type": top("product_type") or typ,
+         "category": top("category_name"), "tags": f"New, {typ}"}
+    return {k: v for k, v in d.items() if v}
 
 
 @router.get("")
@@ -91,6 +116,50 @@ def filter_options():
     return db.get_filter_options()
 
 
+def _client(creds: dict) -> ShopifyClient:
+    cfg = db.get_config()
+    return ShopifyClient(creds["shopify_store"], creds["shopify_token"],
+                         cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION)
+
+
+@router.get("/channels")
+def channels(creds: dict = Depends(get_creds)):
+    try:
+        return {"items": _client(creds).list_channels()}
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.get("/{product_id}/variant-channels")
+def variant_channels(product_id: str, creds: dict = Depends(get_creds)):
+    p = db.get_product_detail(product_id)
+    if not p:
+        raise HTTPException(404, "Product not found")
+    client = _client(creds)
+    try:
+        return {"items": {v["variant_id"]: client.variant_channels(v["variant_id"])
+                          for v in p["variants"]}}
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.get("/{product_id}/variant-channels")
+def variant_channels(product_id: str, creds: dict = Depends(get_creds)):
+    p = db.get_product_detail(product_id)
+    if not p:
+        raise HTTPException(404, "Product not found")
+    cfg = db.get_config()
+    client = ShopifyClient(
+        creds["shopify_store"], creds["shopify_token"],
+        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
+    )
+    try:
+        return {"items": {v["variant_id"]: client.variant_channels(v["variant_id"])
+                          for v in p["variants"]}}
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+
 @router.post("")
 def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
     if db.is_dry_run():
@@ -108,8 +177,13 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
             c = client.find_category(cat)
             p["category_id"] = strip_gid(c["id"])
             p["category_name"] = c["name"]
-        pid = client.create_product(p, cfg)
+        img = p.pop("image_url", None)
+        pid = client.create_product(p, cfg, img)
         created = client.create_variants(pid, vs, cfg) if vs else []
+        all_ids = [c["id"] for c in client.list_channels()]
+        for v, c in zip(vs, created):
+            client.set_variant_channels(
+                c["id"], v["channels"] if v.get("channels") is not None else all_ids)
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.add_local_product(pid, p)
@@ -150,6 +224,61 @@ def delete_variant(product_id: str, variant_id: str, creds: dict = Depends(get_c
         raise HTTPException(502, str(e))
     db.delete_local_variant(variant_id)
     return {"ok": True}
+
+
+@router.get("/by-upc/{upc}")
+def by_upc(upc: str, creds: dict = Depends(get_creds)):
+    upc = upc.strip()
+    try:
+        client = WebamiClient(config.WEBAMI_BASE_URL,
+                              creds.get("webami_username"), creds.get("webami_password"))
+        w = client.fetch_product(f"/{upc}")
+    except Exception as e:
+        raise HTTPException(502, str(e))
+    if not w.get("title"):
+        raise HTTPException(404, "UPC not found in WebAMI")
+    s = db.suggest_parts(w)
+    vendor = db.canon(w.get("artist") or w.get("vendor"))
+    inch = _inch(w.get("product_type"))
+    typ = "Vinyl" if inch else _FMT.get((w.get("product_type") or "").strip().lower(), "")
+    lbs = {"lb": 1, "lbs": 1, "oz": 1 / 16, "kg": 2.20462, "g": 1 / 453.592}
+    cost = w.get("price")
+    color = s["color"]
+    if inch:
+        c = _re.sub(r"(?i)\s*vinyl$", "", color or "").strip()
+        words = [x for x in c.split() if x.lower() not in ("and", "&", "none")]
+        c = " ".join(words) if words and c.lower() != "none" else ""
+        color = f"{c} {inch}".strip().title().replace("-Inch", "-inch")
+    var = {
+        "edition": s["edition"], "color": color, "attributes": s["attributes"],
+        "upc": upc, "description": w.get("description"),
+        "release_date": w.get("release_date"),
+        "cost": f"{cost:.2f}" if cost is not None else None,
+        "price": f"{cost / 0.66:.2f}" if cost is not None else None,
+        "weight": (round(w["weight"] * lbs.get(w.get("weight_unit"), 1), 4)
+                   if w.get("weight") is not None else None),
+        "image_url": w.get("image_url"),
+    }
+    var = {k: str(v) for k, v in var.items() if v not in (None, "", "None")}
+    prod = {"title": s["title"], "vendor": vendor, **_defaults(typ),
+            "genres": ", ".join(g for g in (w.get("genres") or "").split(",") if g)}
+    prod = {k: v for k, v in prod.items() if v}
+    conn = db.get_conn()
+    ve = conn.execute(
+        "SELECT v.variant_id, v.title, p.product_id, p.title AS product_title "
+        "FROM shopify_variants v JOIN shopify_products p ON p.product_id=v.product_id "
+        "WHERE v.upc=? LIMIT 1", (upc,)).fetchone()
+    if ve:
+        pe = {"product_id": ve["product_id"], "title": ve["product_title"]}
+    else:
+        r = conn.execute(
+            "SELECT product_id, title FROM shopify_products "
+            "WHERE title=? COLLATE NOCASE AND vendor=? COLLATE NOCASE LIMIT 1",
+            (prod["title"], vendor)).fetchone()
+        pe = dict(r) if r else None
+    return {"image_url": w.get("image_url"), "webami_title": w["title"],
+            "prefill": {"product": prod, "variant": var},
+            "variant_exists": dict(ve) if ve else None, "product_exists": pe}
 
 
 @router.get("/{product_id}/webami-suggestions")
@@ -197,6 +326,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
                               "features": page.get("features"),
                               "description": page.get("description"),
                               "release_date": page.get("release_date"),
+                              "image_url": page.get("image_url"),
                               "genres": page.get("genres"),
                               "weight": page.get("weight"),
                               "weight_unit": page.get("weight_unit"),
@@ -215,6 +345,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
     p["siblings"] = [x for x in p["variants"] if x["variant_id"] != variant_id]
     for c in cands:
         c["suggested"] = db.suggest_parts(c)
+        c["defaults"] = _defaults(_FMT.get((c.get("product_type") or "").strip().lower(), ""))
     return {"items": cands[:15]}
 
 
@@ -258,6 +389,15 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
             not existing[0]["title"] or existing[0]["title"] == "Default Title")
         created = (client.create_variants(product_id, new_vs, cfg, only_default)
                    if new_vs else [])
+        all_ids = None
+        for v in vs:
+            if v.get("channels") is not None:
+                client.set_variant_channels(v["id"], v["channels"])
+        for v, c in zip(new_vs, created):
+            if v.get("channels") is None:
+                all_ids = all_ids or [x["id"] for x in client.list_channels()]
+            client.set_variant_channels(
+                c["id"], v["channels"] if v.get("channels") is not None else all_ids)
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.update_local(product_id, p, vs)

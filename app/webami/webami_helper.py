@@ -40,7 +40,7 @@ _COLOR_WORDS = [
     "apple", "flame", "seablue", "sea", "sky", "canary", "bone", "bubblegum", "splash",
     "custard", "forest", "ice", "sand", "sunrise", "sunset", "sun", "sangria", "candy cane",
     "vanilla", "citrus", "seafoam", "royal", "blush", "ocean", "evergreen", "moonstone",
-    "eggshell", "coffee", "heavyweight", "ecorecord", "recycled", "biovinyl",
+    "eggshell", "coffee", "heavyweight", "ecorecord", "recycled", "biovinyl", "organic earth",
 ]
 _COLOR_RE = (r"(?:(?:%s)(?:\s+|/|-)?)+\s*(?:vinyl|picture\s+disc)?"
              % "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)))
