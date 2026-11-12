@@ -110,3 +110,7 @@ def list_price_queue() -> list[dict]:
         f"JOIN shopify_variants v ON v.variant_id=q.variant_id "
         f"JOIN shopify_products p ON p.product_id=v.product_id "
         f"ORDER BY p.vendor COLLATE NOCASE, p.title COLLATE NOCASE").fetchall())
+
+
+def sell_price(cost: float) -> float:
+    return round(cost / DIV, 2)

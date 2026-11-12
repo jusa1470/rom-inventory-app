@@ -29,15 +29,18 @@ from app.shopify.queries import (
     Q_VARIANT_PUBS,
     bulk_products_query,
     Q_LOCATIONS,
-    Q_MORE_VARIANTS,
-    Q_PRODUCTS,
     Q_PRODUCTS_COUNT,
-    VARIANT_METAFIELDS,
-    vars_from_cfg,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
 OPTION_NAME = "Edition | Color | Attributes"
+_PRODUCT_FIELDS = (("title", "title"), ("vendor", "vendor"), ("status", "status"),
+                   ("product_type", "productType"), ("tags", "tags"), ("handle", "handle"))
+
+def _check(data: dict, key: str) -> None:
+    errs = (data.get(key) or {}).get("userErrors")
+    if errs:
+        raise RuntimeError(f"{key}: {errs}")
 
 
 def _mfs(f: dict, entries: list, cfg: dict) -> list[dict]:
@@ -126,57 +129,6 @@ class ShopifyClient:
     def count_products(self, query: Optional[str] = None) -> int:
         data = self.gql(Q_PRODUCTS_COUNT, {"query": query})
         return int((data.get("productsCount") or {}).get("count") or 0)
-
-    def _fetch_remaining_variants(
-        self, product_id: str, after: str, cfg: dict
-    ) -> list[dict]:
-        """Variants beyond the first page of a product, following the cursor."""
-        variables: dict[str, str] = vars_from_cfg(cfg, VARIANT_METAFIELDS)
-        variables["variantFirst"] = config.SHOPIFY_VARIANT_PAGE_SIZE
-        nodes: list[dict] = []
-        cursor: Optional[str] = after
-        while cursor:
-            data = self.gql(
-                Q_MORE_VARIANTS, {**variables, "id": product_id, "after": cursor}
-            )
-            page = ((data.get("product") or {}).get("variants")) or {}
-            nodes.extend(page.get("nodes", []))
-            info = page.get("pageInfo") or {}
-            cursor = info.get("endCursor") if info.get("hasNextPage") else None
-        return nodes
-
-    def iter_all_products(
-        self, cfg: dict, query: Optional[str] = None
-    ) -> Iterator[dict]:
-        """Yield each product node with its complete variants list."""
-        base: dict[str, str] = vars_from_cfg(cfg)
-        cursor: Optional[str] = None
-        while True:
-            data = self.gql(
-                Q_PRODUCTS,
-                {
-                    **base,
-                    "first": config.SHOPIFY_PAGE_SIZE,
-                    "variantFirst": config.SHOPIFY_VARIANT_PAGE_SIZE,
-                    "after": cursor,
-                    "query": query,
-                },
-            )
-            page = data.get("products") or {}
-            for node in page.get("nodes", []):
-                variants = node.get("variants") or {}
-                info = variants.get("pageInfo") or {}
-                if info.get("hasNextPage"):
-                    variants.setdefault("nodes", []).extend(
-                        self._fetch_remaining_variants(
-                            node["id"], info["endCursor"], cfg
-                        )
-                    )
-                yield node
-            info = page.get("pageInfo") or {}
-            if not info.get("hasNextPage"):
-                break
-            cursor = info["endCursor"]
 
     # ── Bulk export ───────────────────────────────────────────────────────────
 
@@ -271,12 +223,7 @@ class ShopifyClient:
         return hits[0]
 
     def update_product(self, product_id: str, f: dict, cfg: dict) -> None:
-        inp: dict[str, Any] = {"id": f"gid://shopify/Product/{product_id}"}
-        for local, api in (("title", "title"), ("vendor", "vendor"), ("status", "status"),
-                           ("product_type", "productType"), ("tags", "tags"),
-                           ("handle", "handle")):
-            if local in f:
-                inp[api] = f[local]
+        inp = {"id": f"gid://shopify/Product/{product_id}", **self._product_input(f)}
         if "category_id" in f:
             inp["category"] = f"gid://shopify/TaxonomyCategory/{f['category_id']}"
         clear = [a for a, _, _ in BULK_PRODUCT_MF if f.get(a) == ""]
@@ -284,21 +231,16 @@ class ShopifyClient:
         if mfs:
             inp["metafields"] = mfs
         if len(inp) > 1:
-            data = self.gql(M_PRODUCT_UPDATE, {"product": inp})
-            errs = (data.get("productUpdate") or {}).get("userErrors")
-            if errs:
-                raise RuntimeError(f"productUpdate: {errs}")
+            _check(self.gql(M_PRODUCT_UPDATE, {"product": inp}), "productUpdate")
         if clear:
             ids = [{"ownerId": f"gid://shopify/Product/{product_id}",
                     "namespace": cfg[ns], "key": cfg[key]}
                    for a, ns, key in BULK_PRODUCT_MF if a in clear]
-            data = self.gql(M_METAFIELDS_DELETE, {"metafields": ids})
-            errs = (data.get("metafieldsDelete") or {}).get("userErrors")
-            if errs:
-                raise RuntimeError(f"metafieldsDelete: {errs}")
+            _check(self.gql(M_METAFIELDS_DELETE, {"metafields": ids}), "metafieldsDelete")
     
     def create_product(self, f: dict, cfg: dict) -> str:
         f = {k: v for k, v in f.items() if v not in ("", None, [])}
+        inp = self._product_input(f)
         inp: dict[str, Any] = {}
         for local, api in (("title", "title"), ("vendor", "vendor"), ("status", "status"),
                            ("product_type", "productType"), ("tags", "tags"),
@@ -318,27 +260,13 @@ class ShopifyClient:
     def delete_product(self, product_id: str) -> None:
         data = self.gql(M_PRODUCT_DELETE,
                         {"input": {"id": f"gid://shopify/Product/{product_id}"}})
-        errs = (data.get("productDelete") or {}).get("userErrors")
-        if errs:
-            raise RuntimeError(f"productDelete: {errs}")
+        _check(data, "productDelete")
 
     def delete_variant(self, product_id: str, variant_id: str) -> None:
         data = self.gql(M_VARIANTS_DELETE, {
             "productId": f"gid://shopify/Product/{product_id}",
             "variantsIds": [f"gid://shopify/ProductVariant/{variant_id}"]})
-        errs = (data.get("productVariantsBulkDelete") or {}).get("userErrors")
-        if errs:
-            raise RuntimeError(f"variantsDelete: {errs}")
-
-    def variant_channels(self, variant_id: str) -> list[str]:
-        d = self.gql(Q_VARIANT_PUBS,
-                     {"id": f"gid://shopify/ProductVariant/{variant_id}"}).get("productVariant") or {}
-        out = []
-        for n in (d.get("resourcePublications") or {}).get("nodes", []):
-            if n.get("isPublished"):
-                pub = n["publication"]
-                out.append((pub.get("catalog") or {}).get("title") or pub["id"].rsplit("/", 1)[-1])
-        return out
+        _check(data, "productVariantsBulkDelete")
 
     @staticmethod
     def _cname(pub: dict) -> str:
@@ -364,9 +292,7 @@ class ShopifyClient:
             if not s:
                 continue
             data = self.gql(mut, {"id": gid, "input": [{"publicationId": i} for i in s]})
-            errs = (data.get(key) or {}).get("userErrors")
-            if errs:
-                raise RuntimeError(f"{key}: {errs}")
+            _check(data, key)
 
     def _options(self, product_id: str) -> list[dict]:
         data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
@@ -394,11 +320,7 @@ class ShopifyClient:
             v: dict[str, Any] = {"id": f"gid://shopify/ProductVariant/{f['id']}"}
             if "price" in f:
                 v["price"] = f["price"]
-            inv: dict[str, Any] = {}
-            if "cost" in f:
-                inv["cost"] = f["cost"]
-            if "weight" in f:
-                inv["measurement"] = {"weight": {"value": f["weight"], "unit": "POUNDS"}}
+            inv = self._inventory_input(f)
             if inv:
                 v["inventoryItem"] = inv
             if "title" in f:
@@ -418,9 +340,7 @@ class ShopifyClient:
                 M_VARIANTS_UPDATE,
                 {"productId": f"gid://shopify/Product/{product_id}", "variants": bulk},
             )
-            errs = (data.get("productVariantsBulkUpdate") or {}).get("userErrors")
-            if errs:
-                raise RuntimeError(f"variantsUpdate: {errs}")
+            _check(data, "productVariantsBulkUpdate")
 
         qty = [
             {
@@ -437,9 +357,7 @@ class ShopifyClient:
                 "name": "available", "reason": "correction",
                 "ignoreCompareQuantity": True, "quantities": qty,
             }})
-            errs = (data.get("inventorySetQuantities") or {}).get("userErrors")
-            if errs:
-                raise RuntimeError(f"inventorySetQuantities: {errs}")
+            _check(data, "inventorySetQuantities")
     
     def create_variants(self, product_id: str, variants: list[dict], cfg: dict,
                         replace_default: bool = True) -> list[dict]:
@@ -451,15 +369,9 @@ class ShopifyClient:
                 v["barcode"] = f["barcode"]
             if "price" in f:
                 v["price"] = f["price"]
-            inv: dict[str, Any] = {}
-            if "cost" in f:
-                inv["cost"] = f["cost"]
-            if "weight" in f:
-                inv["measurement"] = {"weight": {"value": f["weight"], "unit": "POUNDS"}}
+            inv = self._inventory_input(f)
             if inv:
                 v["inventoryItem"] = inv
-            if f.get("image_url") and not f.get("media_id"):
-                v["mediaSrc"] = [f["image_url"]]
             title = (f.get("title") or "Standard").strip()
             parts = [title] if len(options) == 1 else [s.strip() for s in title.split(" / ")]
             if len(parts) != len(options):
@@ -502,3 +414,19 @@ class ShopifyClient:
             if n.get("isPrimary"):
                 return n["id"]
         return nodes[0]["id"] if nodes else None
+    
+    @staticmethod
+    def _product_input(f: dict) -> dict:
+        inp = {api: f[local] for local, api in _PRODUCT_FIELDS if local in f}
+        if "category_id" in f:
+            inp["category"] = f"gid://shopify/TaxonomyCategory/{f['category_id']}"
+        return inp
+
+    @staticmethod
+    def _inventory_input(f: dict) -> dict:
+        inv = {}
+        if "cost" in f:
+            inv["cost"] = f["cost"]
+        if "weight" in f:
+            inv["measurement"] = {"weight": {"value": f["weight"], "unit": "POUNDS"}}
+        return inv

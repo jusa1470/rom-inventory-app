@@ -95,7 +95,7 @@ export class DashboardPage {
     });
 
     await Promise.all([this._loadStats(), this._loadLog()]);
-    SYNCS.forEach(s => this._resumeRunning(s));
+    SYNCS.filter(s => !s.hidden).forEach(s => this._resumeRunning(s));
   }
 
   _setRunning(s, running) {

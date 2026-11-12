@@ -9,12 +9,11 @@ from app.auth import get_creds, require_session
 from app.db.connection import strip_gid
 from app.shopify.shopify_client import ShopifyClient
 from app.webami.webami_client import WebamiClient
+from app.webami.webami_helper import SHOPIFY_TYPE, WEBAMI_FMT, to_lbs
 
 router = APIRouter(
     prefix="/api/products", tags=["products"], dependencies=[Depends(require_session)]
 )
-
-_FMT = {"lp": "Vinyl", "cd": "CD", "cassette": "Cassette"}
 
 
 class ProductIn(BaseModel):
@@ -135,11 +134,7 @@ def variant_channels(product_id: str, creds: dict = Depends(get_creds)):
     p = db.get_product_detail(product_id)
     if not p:
         raise HTTPException(404, "Product not found")
-    cfg = db.get_config()
-    client = ShopifyClient(
-        creds["shopify_store"], creds["shopify_token"],
-        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
-    )
+    client = _client(creds)
     try:
         return {"items": {v["variant_id"]: client.variant_channels(v["variant_id"])
                           for v in p["variants"]}}
@@ -161,7 +156,6 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
             c = client.find_category(cat)
             p["category_id"] = strip_gid(c["id"])
             p["category_name"] = c["name"]
-        img = p.pop("image_url", None)
         pid = client.create_product(p, cfg)
         created = client.create_variants(pid, vs, cfg) if vs else []
         all_ids = [c["id"] for c in client.list_channels()]
@@ -181,7 +175,6 @@ def delete_product(product_id: str, creds: dict = Depends(get_creds)):
     if db.is_dry_run():
         return {"ok": True, "dry_run": True}
     client = _client(creds)
-    cfg = db.get_config()
     try:
         client.delete_product(product_id)
     except RuntimeError as e:
@@ -194,7 +187,6 @@ def delete_product(product_id: str, creds: dict = Depends(get_creds)):
 def delete_variant(product_id: str, variant_id: str, creds: dict = Depends(get_creds)):
     if db.is_dry_run():
         return {"ok": True, "dry_run": True}
-    cfg = db.get_config()
     client = _client(creds)
     try:
         client.delete_variant(product_id, variant_id)
@@ -218,8 +210,7 @@ def by_upc(upc: str, creds: dict = Depends(get_creds)):
     s = db.suggest_parts(w)
     vendor = db.canon(w.get("artist") or w.get("vendor"))
     inch = _inch(w.get("product_type"))
-    typ = "Vinyl" if inch else _FMT.get((w.get("product_type") or "").strip().lower(), "")
-    lbs = {"lb": 1, "lbs": 1, "oz": 1 / 16, "kg": 2.20462, "g": 1 / 453.592}
+    typ = "Vinyl" if inch else SHOPIFY_TYPE.get((w.get("product_type") or "").strip().lower(), "")
     cost = w.get("price")
     color = s["color"]
     if inch:
@@ -232,31 +223,20 @@ def by_upc(upc: str, creds: dict = Depends(get_creds)):
         "upc": upc, "description": w.get("description"),
         "release_date": w.get("release_date"),
         "cost": f"{cost:.2f}" if cost is not None else None,
-        "price": f"{cost / 0.66:.2f}" if cost is not None else None,
-        "weight": (round(w["weight"] * lbs.get(w.get("weight_unit"), 1), 4)
-                   if w.get("weight") is not None else None),
+        "price": f"{db.sell_price(cost):.2f}" if cost is not None else None,
+        "weight": to_lbs(w.get("weight"), w.get("weight_unit")),
         "image_url": w.get("image_url"),
     }
     var = {k: str(v) for k, v in var.items() if v not in (None, "", "None")}
     prod = {"title": s["title"], "vendor": vendor, **_defaults(typ),
             "genres": ", ".join(g for g in (w.get("genres") or "").split(",") if g)}
     prod = {k: v for k, v in prod.items() if v}
-    conn = db.get_conn()
-    ve = conn.execute(
-        "SELECT v.variant_id, v.title, p.product_id, p.title AS product_title "
-        "FROM shopify_variants v JOIN shopify_products p ON p.product_id=v.product_id "
-        "WHERE v.upc=? LIMIT 1", (upc,)).fetchone()
-    if ve:
-        pe = {"product_id": ve["product_id"], "title": ve["product_title"]}
-    else:
-        r = conn.execute(
-            "SELECT product_id, title FROM shopify_products "
-            "WHERE title=? COLLATE NOCASE AND vendor=? COLLATE NOCASE LIMIT 1",
-            (prod["title"], vendor)).fetchone()
-        pe = dict(r) if r else None
+    ve = db.find_variant_by_upc(upc)
+    pe = ({"product_id": ve["product_id"], "title": ve["product_title"]} if ve
+        else db.find_product(prod["title"], vendor))
     return {"image_url": w.get("image_url"), "webami_title": w["title"],
             "prefill": {"product": prod, "variant": var},
-            "variant_exists": dict(ve) if ve else None, "product_exists": pe}
+            "variant_exists": ve, "product_exists": pe}
 
 
 @router.get("/{product_id}/webami-suggestions")
@@ -272,7 +252,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
     cands = db.suggest_local(p)
     if search or not any(c["tier"] == 1 for c in cands):
         stype = p.get("type") or p.get("product_type") or ""
-        fmt = {"Vinyl": "LP", "CD": "CD", "Cassette": "Cassette"}.get(stype, "")
+        fmt = WEBAMI_FMT.get(stype, "")
         try:
             client = WebamiClient(config.WEBAMI_BASE_URL,
                                   creds.get("webami_username"), creds.get("webami_password"))
@@ -287,7 +267,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
                 if r["upc"] in seen or not db.format_ok(stype, r["format"]):
                     continue
                 try:
-                    page = client.get_product(f"/{r['upc']}")
+                    page = client.fetch_product(f"/{r['upc']}")
                 except Exception:
                     continue
                 if not page.get("title"):
@@ -323,7 +303,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
     p["siblings"] = [x for x in p["variants"] if x["variant_id"] != variant_id]
     for c in cands:
         c["suggested"] = db.suggest_parts(c)
-        c["defaults"] = _defaults(_FMT.get((c.get("product_type") or "").strip().lower(), ""))
+        c["defaults"] = _defaults(SHOPIFY_TYPE.get((c.get("product_type") or "").strip().lower(), ""))
     return {"items": cands[:15]}
 
 

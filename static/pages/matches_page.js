@@ -3,28 +3,6 @@ import { Modal } from "../components/modal.js";
 import { Toast } from "../components/toast.js";
 import { WEBAMI_URL, buildPager, debounce, esc, Fmt, thumb, truncCell, variantTitle } from "../util.js";
 
-const UPC_LEVEL = "variant";
-const nz = (v) => String(v ?? "").trim().toLowerCase();
-const same = (p, s) => {
-  if (!s) return false;
-  const sg = s.suggested;
-  const vt = variantTitle(sg.edition, sg.color, sg.attributes);
-  const chk = {
-    cost: p.cost != null && s.price != null && (+p.cost).toFixed(2) === (+s.price).toFixed(2),
-    title: nz(p.title) === nz(sg.title),
-    variant: nz(p.variant_title) === nz(vt),
-    artist: !!s.artist_match,
-    type: fmtOk(p.type || p.product_type, s.product_type),
-  };
-  return Object.values(chk).every(Boolean);
-};
-const fmtOk = (t, f) => {
-  t = nz(t); f = nz(f);
-  if (t === "vinyl") return /lp|vinyl|single/.test(f);
-  if (t === "cd") return f === "cd";
-  if (t === "cassette") return f.includes("cassette");
-  return t === f;
-};
 
 export class MatchesPage {
   constructor() {

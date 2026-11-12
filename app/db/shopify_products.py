@@ -333,3 +333,17 @@ def delete_local_variant(variant_id: str) -> None:
     with transaction() as conn:
         for t in ("price_queue", "price_checks", "shopify_variants"):
             conn.execute(f"DELETE FROM {t} WHERE variant_id=?", (variant_id,))
+
+
+def find_variant_by_upc(upc: str):
+    return row(get_conn().execute(
+        "SELECT v.variant_id, v.title, p.product_id, p.title AS product_title "
+        "FROM shopify_variants v JOIN shopify_products p ON p.product_id=v.product_id "
+        "WHERE v.upc=? LIMIT 1", (upc,)).fetchone())
+
+
+def find_product(title: str, vendor: str):
+    return row(get_conn().execute(
+        "SELECT product_id, title FROM shopify_products "
+        "WHERE title=? COLLATE NOCASE AND vendor=? COLLATE NOCASE LIMIT 1",
+        (title, vendor)).fetchone())

@@ -10,31 +10,29 @@ router = APIRouter(
     prefix="/api/sync", tags=["sync"], dependencies=[Depends(require_session)]
 )
 
+def _launch(creds, need, name, fn, *args, also=()):
+    if not all(creds.get(k) for k in need):
+        raise HTTPException(400, "Credentials not configured")
+    if any(j["name"] in (name, *also) for j in jobs.get_running()):
+        raise HTTPException(409, f"{name} job already running")
+    return {"job_id": jobs.start(name, fn, *args)}
+
+_WM = ("webami_username", "webami_password")
+
 # Shopify
 
 @router.post("/shopify")
 def start_shopify_sync(full: bool = False, creds: dict = Depends(get_creds)):
-    store = creds.get("shopify_store")
-    token = creds.get("shopify_token")
-    if not store or not token:
-        raise HTTPException(400, "Shopify credentials not configured")
-    if any(job["name"] == "Shopify Sync" for job in jobs.get_running()):
-        raise HTTPException(409, "Shopify Sync job already running")
-    job_id = jobs.start("Shopify Sync", jobs.run_shopify_sync, store, token, full)
-    return {"job_id": job_id}
+    return _launch(creds, ("shopify_store", "shopify_token"), "Shopify Sync",
+               jobs.run_shopify_sync, creds["shopify_store"], creds["shopify_token"], full)
 
 
 # WebAMI
 
 @router.post("/webami")
 def start_webami_sync(creds: dict = Depends(get_creds)):
-    user, pw = creds.get("webami_username"), creds.get("webami_password")
-    if not user or not pw:
-        raise HTTPException(400, "WebAMI credentials not configured")
-    if any(job["name"] == "WebAMI Sync" for job in jobs.get_running()):
-        raise HTTPException(409, "WebAMI Sync job already running")
-    job_id = jobs.start("WebAMI Sync", jobs.run_webami_sync, config.WEBAMI_BASE_URL, user, pw)
-    return {"job_id": job_id}
+    return _launch(creds, _WM, "WebAMI Sync", jobs.run_webami_sync,
+               config.WEBAMI_BASE_URL, creds["webami_username"], creds["webami_password"])
 
 
 @router.get("/webami-stats")
@@ -71,22 +69,12 @@ def get_sync_log(limit: int = Query(15, ge=1, le=200)):
 
 @router.post("/webami-products")
 def start_webami_resolve(refetch: bool = False, creds: dict = Depends(get_creds)):
-    user, pw = creds.get("webami_username"), creds.get("webami_password")
-    if not user or not pw:
-        raise HTTPException(400, "WebAMI credentials not configured")
-    if any(j["name"] in ("WebAMI Sync", "WebAMI Products") for j in jobs.get_running()):
-        raise HTTPException(409, "A WebAMI job is already running")
-    job_id = jobs.start("WebAMI Products", jobs.run_webami_resolve,
-                        config.WEBAMI_BASE_URL, user, pw, refetch)
-    return {"job_id": job_id}
+    return _launch(creds, _WM, "WebAMI Products", jobs.run_webami_resolve,
+               config.WEBAMI_BASE_URL, creds["webami_username"], creds["webami_password"],
+               refetch, also=("WebAMI Sync",))
 
 
 @router.post("/prices")
 def start_price_check(creds: dict = Depends(get_creds)):
-    user, pw = creds.get("webami_username"), creds.get("webami_password")
-    if not user or not pw:
-        raise HTTPException(400, "WebAMI credentials not configured")
-    if any(j["name"] == "Price Check" for j in jobs.get_running()):
-        raise HTTPException(409, "Price Check job already running")
-    job_id = jobs.start("Price Check", jobs.run_price_check, config.WEBAMI_BASE_URL, user, pw)
-    return {"job_id": job_id}
+    return _launch(creds, _WM, "Price Check", jobs.run_price_check,
+               config.WEBAMI_BASE_URL, creds["webami_username"], creds["webami_password"])

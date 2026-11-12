@@ -68,7 +68,6 @@ _COLOR_ONLY = re.compile(
     rf"^(?:{_COLOR_RE}|\d{{3}}\s?g(?:ram)?(?:\s+{_COLOR_RE})?|picture\s+disc|zoetrope)$", re.I)
 _ATTR_SET = {norm(a) for a in _ATTRS}
 _ED_SET = {norm(e) for e in _EDITIONS}
-_SKIP_FEAT = {"vinyl", "lp"}
 
 
 def simplify(t: str) -> str:
@@ -96,3 +95,11 @@ def format_ok(shopify_type: str | None, wfmt: str | None) -> bool:
     if t == "cassette":
         return "cassette" in f
     return True
+
+
+SHOPIFY_TYPE = {"lp": "Vinyl", "cd": "CD", "cassette": "Cassette"}  # WebAMI format -> Shopify type
+WEBAMI_FMT = {"Vinyl": "LP", "CD": "CD", "Cassette": "Cassette"}    # Shopify type -> search format
+_LBS = {"lb": 1, "lbs": 1, "oz": 1 / 16, "kg": 2.20462, "g": 1 / 453.592}
+
+def to_lbs(w, unit):
+    return None if w is None else round(w * _LBS.get((unit or "").lower(), 1), 4)

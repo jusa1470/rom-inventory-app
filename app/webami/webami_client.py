@@ -120,10 +120,6 @@ def _description(page: str):
     return _txt(BeautifulSoup(m.group(1), "lxml")) if m else None
 
 
-def _img(src):
-    return urljoin(config.WEBAMI_BASE_URL + "/", src) if src else None
-
-
 def _abs(u):
     if not u:
         return None
@@ -164,6 +160,7 @@ def parse_product(page: str) -> dict:
     
     music = (fmt or "").strip().lower() in ("lp", "cd", "cassette")
     artist = _val(page, "artist") if music else None
+    wt, wu = _weight(_info(soup, "Weight"))
     return {
         "title": _txt(soup.select_one("h2.title-h2")) or _val(page, "album"),
         "artist": artist,
@@ -178,8 +175,8 @@ def parse_product(page: str) -> dict:
         "description": _description(page),
         "release_date": _info(soup, "Release Date"),
         "genres": _genres(soup),
-        "weight": _weight(_info(soup, "Weight"))[0],
-        "weight_unit": _weight(_info(soup, "Weight"))[1],
+        "weight": wt,
+        "weight_unit": wu,
         "image_url": _abs(
             (soup.select_one(".main-cover img") or {}).get("src")
             or (ld.get("image") or [None])[0]

@@ -5,9 +5,9 @@ from app import config, db
 from app.jobs.tracker import is_cancelled, update
 from app.webami import WebamiClient
 from app.webami.webami_client import find_match
+from app.webami.webami_helper import WEBAMI_FMT
 
 logger = logging.getLogger(__name__)
-FMT = {"Vinyl": "LP", "CD": "CD", "Cassette": "Cassette"}
 
 
 def run_price_check(job_id: str, base_url: str, username: str, password: str) -> dict:
@@ -36,7 +36,7 @@ def _check(job_id, base_url, username, password) -> dict:
         p = valid(f"/{v['upc']}")
         if p and p.get("price") is not None:
             return {"status": "ok", "wm_upc": v["upc"], "wm_title": p["title"], "new_cost": p["price"]}
-        fmt = FMT.get(v["type"], "")
+        fmt = WEBAMI_FMT.get(v["type"], "")
         for search in (lambda: client.search_upc(v["upc"]),
                        lambda: client.search_site(v["title"], v["vendor"] or "", fmt)):
             try:

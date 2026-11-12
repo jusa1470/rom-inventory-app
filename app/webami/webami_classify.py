@@ -338,3 +338,11 @@ def suggest_parts(w: dict) -> dict:
 
     return {"title": base, "edition": edition, "color": color,
             "attributes": ", ".join(attrs) or "None"}
+
+
+def variant_title(s: dict) -> str:
+    none = lambda x: not x or x.lower() == "none"
+    return " | ".join(x for x in (
+        s.get("edition") or "Standard",
+        None if none(s.get("color")) else s["color"],
+        None if none(s.get("attributes")) else s["attributes"]) if x)

@@ -830,12 +830,12 @@ export class ProductsPage {
       <div class="input-group" style="margin-top:12px">
         <label class="check-row" style="margin-top:0">
           <input type="checkbox" name="upd_title"><span>Update title</span></label>
-        <input class="input" name="title" value="${esc(items[0]?.suggested_title || p.title)}">
+        <input class="input" name="title" value="${esc(items[0]?.suggested.title || p.title)}">
       </div>`;
     const titleInput = body.querySelector("[name=title]");
     body.querySelectorAll("[name=cand]").forEach((r) =>
       r.addEventListener("change", () => {
-        titleInput.value = items[+r.value].suggested_title;
+        titleInput.value = items[+r.value].suggested.title;
       }),
     );
 

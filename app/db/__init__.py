@@ -8,12 +8,14 @@ from app.db.missing import list_missing
 from app.db.prices import (
     get_price_variants, save_price_check, resolve_price_check, list_price_changes,
     price_queue_add, price_queue_remove, price_queue_filtered, price_queue_set, list_price_queue,
+    sell_price,
 )
 from app.db.schema import init_db as _apply_schema
 from app.db.shopify_products import (
     count_products, get_filter_options, get_product_detail, list_products,
     save_shopify_product, update_local, delete_products_not_synced_since, 
-    add_local_variants, add_local_product, delete_local_product, delete_local_variant
+    add_local_variants, add_local_product, delete_local_product, delete_local_variant,
+    find_variant_by_upc, find_product
 )
 from app.db.sync_log import get_sync_log, log_sync
 from app.db.webami_orders import (
@@ -27,7 +29,7 @@ from app.db.webami_products import (
     list_unmatched_variants, good_match, reset_webami_products,
     drop_from_match_cache, suggest_local, decorate_candidates, shopify_candidates, search_shopify
 )
-from app.webami.webami_classify import kw_eval, suggest_parts, variant_kws
+from app.webami.webami_classify import kw_eval, suggest_parts, variant_kws, variant_title
 
 
 def init_db() -> None:
@@ -53,11 +55,12 @@ __all__: list[str] = [
     # Price functions
     "get_price_variants", "save_price_check", "resolve_price_check", "list_price_changes",
     "price_queue_add", "price_queue_remove", "price_queue_filtered", "price_queue_set", "list_price_queue",
+    "sell_price",
     
     # Shopify product functions
     "count_products", "get_filter_options", "get_product_detail", "list_products", "save_shopify_product", 
     "update_local", "delete_products_not_synced_since", "add_local_variants", "add_local_product", 
-    "delete_local_product", "delete_local_variant",
+    "delete_local_product", "delete_local_variant", "find_variant_by_upc", "find_product",
     
     # Sync log functions
     "get_sync_log", "log_sync",
@@ -74,5 +77,5 @@ __all__: list[str] = [
     "drop_from_match_cache", "suggest_local", "decorate_candidates", "shopify_candidates", "search_shopify",
     
     # Webami classify functions
-    "kw_eval", "suggest_parts", "variant_kws",
+    "kw_eval", "suggest_parts", "variant_kws", "variant_title",
 ]

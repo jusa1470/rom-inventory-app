@@ -149,8 +149,8 @@ export class SettingsPage {
       card.innerHTML = `
       <div class="section-label" style="margin-top:0">Normalized artists
       <button type="button" class="btn btn-ghost btn-sm" id="art-apply" style="margin-left:12px">Review existing</button>
-      <button type="button" class="btn btn-ghost btn-sm" id="art-mm">Find mismatches</button>
-        <div class="scope-add" style="margin:0 0 12px">
+      <button type="button" class="btn btn-ghost btn-sm" id="art-mm">Find mismatches</button></div>
+      <div class="scope-add" style="margin:0 0 12px">
           <input class="input" name="alias" placeholder="Variant (e.g. Beatles)">
           <input class="input" name="canonical" placeholder="Use instead (e.g. The Beatles)">
           <button type="button" class="btn btn-primary" id="art-add">Add</button>

@@ -2,7 +2,7 @@
 from difflib import SequenceMatcher
 import logging
 
-from app import config
+from app import config, db
 from app.db.artists import alias_for, alias_map, canon, key
 from app.db.connection import get_conn, rows, transaction
 from app.webami.webami_classify import kw_eval, suggest_parts
@@ -12,6 +12,11 @@ from app.webami.webami_helper import (
 logger: logging.Logger = logging.getLogger(__name__)
 _cache: dict = {"key": None, "data": None}
 
+
+def _variants(conn, product_id: str) -> list[dict]:
+    return rows(conn.execute(
+        "SELECT variant_id, title, upc, inventory_quantity FROM shopify_variants "
+        "WHERE product_id=? ORDER BY rowid", (product_id,)).fetchall())
 
 # ── similarity ───────────────────────────────────────────────────────
 
@@ -183,14 +188,6 @@ def _decorate_page(items: list[dict]) -> list[dict]:
     return items
 
 
-def _vt(sg: dict) -> str:
-    none = lambda x: not x or x.lower() == "none"
-    return " | ".join(x for x in (
-        sg.get("edition") or "Standard",
-        None if none(sg.get("color")) else sg["color"],
-        None if none(sg.get("attributes")) else sg["attributes"]) if x)
-
-
 def is_identical(p: dict) -> bool:
     if not p["suggestions"]:
         return False
@@ -202,7 +199,7 @@ def is_identical(p: dict) -> bool:
     except (TypeError, ValueError):
         return False
     return (cost_ok and n(p["title"]) == n(sg["title"])
-            and n(p["variant_title"]) == n(_vt(sg))
+            and n(p["variant_title"]) == n(db.variant_title(sg))
             and bool(s["artist_match"])
             and format_ok(p.get("type") or p.get("product_type"), s["product_type"]))
 
@@ -285,9 +282,7 @@ def shopify_candidates(w: dict, limit: int = 5) -> list[dict]:
     out.sort(key=lambda x: -x["score"])
     out = out[:limit]
     for p in out:
-        p["variants"] = rows(conn.execute(
-            "SELECT variant_id, title, upc, inventory_quantity FROM shopify_variants "
-            "WHERE product_id=? ORDER BY rowid", (p["product_id"],)).fetchall())
+        p["variants"] = _variants(conn, p["product_id"])
     return out
 
 
@@ -300,7 +295,5 @@ def search_shopify(q: str, limit: int = 15) -> list[dict]:
         "ORDER BY vendor COLLATE NOCASE, title COLLATE NOCASE LIMIT ?",
         [like, like, like, limit]).fetchall())
     for p in out:
-        p["variants"] = rows(conn.execute(
-            "SELECT variant_id, title, upc, inventory_quantity FROM shopify_variants "
-            "WHERE product_id=? ORDER BY rowid", (p["product_id"],)).fetchall())
+        p["variants"] = _variants(conn, p["product_id"])
     return out

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app import config, db
 from app.auth import get_creds, require_session
 from app.shopify.shopify_client import ShopifyClient
+from app.webami.webami_helper import SHOPIFY_TYPE, to_lbs
 
 router = APIRouter(
     prefix="/api/orders", tags=["orders"], dependencies=[Depends(require_session)]
@@ -41,16 +42,6 @@ class Target(BaseModel):
     product_id: str | None = None
 
 
-_LBS = {"lb": 1, "lbs": 1, "oz": 1 / 16, "kg": 2.20462, "g": 1 / 453.592}
-
-
-def _vtitle(s: dict) -> str:
-    none = lambda x: not x or x.lower() == "none"
-    return " | ".join(x for x in (s["edition"] or "Standard",
-                                  None if none(s["color"]) else s["color"],
-                                  None if none(s["attributes"]) else s["attributes"]) if x)
-
-
 def _client(creds: dict):
     cfg = db.get_config()
     return ShopifyClient(creds["shopify_store"], creds["shopify_token"],
@@ -71,17 +62,17 @@ def _left(guid: str, upc: str) -> int:
 
 def _build(wp: dict, upc: str, qty: int = 0):
     s = db.suggest_parts(wp)
-    fmt = {"LP": "Vinyl"}.get(wp.get("product_type"), wp.get("product_type"))
+    fmt = SHOPIFY_TYPE.get((wp.get("product_type") or "").lower(), wp.get("product_type"))
     genres = [g.strip() for g in (wp.get("genres") or "").split(",") if g.strip()]
     p = {"title": s["title"], "vendor": db.canon(wp.get("artist") or wp.get("vendor")),
          "status": "ACTIVE", "type": fmt, "genres": genres}
-    v = {"title": _vtitle(s), "upc": upc, "inventory_quantity": qty,
+    v = {"title": db.variant_title(s), "upc": upc, "inventory_quantity": qty,
          "description": wp.get("description") or "",
          "release_date": wp.get("release_date") or ""}
     if wp.get("price") is not None:
-        v |= {"cost": f"{wp['price']:.2f}", "price": f"{wp['price'] / 0.66:.2f}"}
+        v |= {"cost": f"{wp['price']:.2f}", "price": f"{db.sell_price(wp['price']):.2f}"}
     if wp.get("weight") is not None:
-        v["weight"] = round(wp["weight"] * _LBS.get((wp.get("weight_unit") or "").lower(), 1), 4)
+        v["weight"] = to_lbs(wp["weight"], wp.get("weight_unit"))
     return p, v
 
 
@@ -100,7 +91,7 @@ def _plan(r: dict) -> dict:
     if wp:
         c = next(iter(db.shopify_candidates(wp, 1)), None)
         if c:
-            vt = _vtitle(db.suggest_parts(wp)).lower()
+            vt = db.variant_title(db.suggest_parts(wp)).lower()
             m = next((x for x in c["variants"]
                       if not x["upc"] and (x["title"] or "").lower() == vt), None)
             if m:
@@ -124,7 +115,7 @@ def _view(r: dict) -> dict:
         wp = db.get_webami_product_by_id(r["wp_id"])
         if wp:
             s = db.suggest_parts(wp)
-            pl |= {"new_title": s["title"], "new_vtitle": _vtitle(s)}
+            pl |= {"new_title": s["title"], "new_vtitle": db.variant_title(s)}
     return pl
 
 
@@ -138,8 +129,14 @@ def _apply(client, cfg, r: dict, pl: dict, cost: float | None, titles: bool = Fa
                "inventory_quantity": (v["inventory_quantity"] or 0) + qty}]
         if pl["action"] == "map":
             vs[0]["upc"] = upc
+        wp = _wp(guid, upc)
+        if titles and wp:
+            s = db.suggest_parts(wp)
+            vs[0]["title"] = db.variant_title(s)
+            client.update_product(v["product_id"], {"title": s["title"]}, cfg)
+            db.update_local(v["product_id"], {"title": s["title"]}, [])
         if cost is not None:
-            vs[0] |= {"cost": f"{cost:.2f}", "price": f"{cost / 0.66:.2f}"}
+            vs[0] |= {"cost": f"{cost:.2f}", "price": f"{db.sell_price(cost):.2f}"}
         client.update_variants(v["product_id"], vs, cfg)
         db.update_local(v["product_id"], {}, vs)
         db.drop_from_match_cache(v["variant_id"])
@@ -154,7 +151,13 @@ def _apply(client, cfg, r: dict, pl: dict, cost: float | None, titles: bool = Fa
     else:
         pid = client.create_product(p, cfg)
         db.add_local_product(pid, p)
-    made = client.create_variants(pid, [variant], cfg)
+    try:
+        made = client.create_variants(pid, [variant], cfg)
+    except Exception:
+        if pl["action"] == "new":
+            client.delete_product(pid)
+            db.delete_local_product(pid)
+        raise
     db.add_local_variants(pid, [variant], made)
     db.log_receipt(guid, upc, qty, made[0]["id"])
     return pl["action"]
@@ -256,7 +259,7 @@ def queue_push(body: Push = Push(), creds: dict = Depends(get_creds)):
             pl = _plan(r)
             cost = (r["wm_cost"] if key in body.cost_keys and r["wm_cost"] is not None
                     and pl["action"] in ("update", "map") else None)
-            res = _apply(client, cfg, r, pl, cost)
+            res = _apply(client, cfg, r, pl, cost, key in body.title_keys)
         except Exception as e:
             errors.append(f"{r['upc']}: {e}")
             continue
