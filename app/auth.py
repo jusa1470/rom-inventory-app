@@ -65,9 +65,9 @@ def login(body: Login, response: Response):
 
 @router.post("/logout")
 def logout(response: Response, rs_session: str | None = Cookie(default=None)):
+    global _creds
     _sessions.discard(rs_session or "")
     if not _sessions:
-        global _creds
         _creds = None
     response.delete_cookie("rs_session")
     return {"ok": True}

@@ -1,7 +1,7 @@
 import { API } from '../api.js';
 import { Modal } from '../components/modal.js';
 import { Toast } from '../components/toast.js';
-import { Fmt, buildPager, debounce, esc, truncCell } from '../util.js';
+import { Fmt, WEBAMI_URL, buildPager, debounce, esc, truncCell } from '../util.js';
 import { ReviewPage } from './review_page.js';
 
 export class OrdersPage {
@@ -245,7 +245,6 @@ export class OrdersPage {
     const item = (label, value, cls = '') => `
       <div><div class="input-label">${label}</div>
       <div class="detail-value ${cls}">${esc(value || '—')}</div></div>`;
-    const config_base = 'https://webami.aent.com';
     const body = document.createElement('div');
     body.innerHTML = `
       <div class="detail-grid">
@@ -260,7 +259,7 @@ export class OrdersPage {
         ${item('WebAMI ID', p.wmsid, 'mono')}
         ${item('Last synced', Fmt.datetime(p.last_synced))}
         ${p.href ? `<div><div class="input-label">WebAMI</div>
-          <a href="${esc(config_base + p.href)}" target="_blank" rel="noopener">Open product page ↗</a></div>` : ''}
+          <a href="${esc(WEBAMI_URL + p.href)}" target="_blank" rel="noopener">Open product page ↗</a></div>` : ''}
       </div>
       <div class="section-label">Known IDs (${p.ids.length})</div>
       <div class="table-wrap">
@@ -293,7 +292,7 @@ export class OrdersPage {
       <thead><tr><th>Artist</th><th>Title</th><th>UPC</th><th class="num">Ordered</th>
         <th class="num">Received</th><th class="num">Outstanding</th><th class="num">Orders</th></tr></thead>
       <tbody>${items.map(r => `<tr>
-        <td>${truncCell(r.artist)}</td>
+        <td>${truncCell(r.artist)}</td><td>${truncCell(r.title)}</td><td class="mono">${esc(r.upc)}</td>
         <td class="num">${r.ordered}</td><td class="num">${r.received}</td>
         <td class="num">${r.ordered - r.received}</td><td class="num">${r.orders}</td></tr>`).join('')}
       </tbody></table></div>` : '<div class="muted">Nothing outstanding</div>';
@@ -337,10 +336,5 @@ export class OrdersPage {
     }));
     Modal.open({ title: 'Receipts', body, width: '800px',
       buttons: [{ label: 'Close', onClick: Modal.close }] });
-  }
-
-  _sync() {
-    this._qcount();
-    return this._order ? this._openOrder(this._order) : this._load();
   }
 }

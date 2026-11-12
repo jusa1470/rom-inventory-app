@@ -91,6 +91,10 @@ MIGRATIONS: list[str] = [
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         order_guid TEXT NOT NULL REFERENCES webami_orders(guid) ON DELETE CASCADE,
         position   INTEGER NOT NULL,
+        sku        TEXT,
+        href       TEXT,
+        format     TEXT,
+        product_id INTEGER REFERENCES webami_products(id) ON DELETE SET NULL,
         upc        TEXT,
         title      TEXT,
         artist     TEXT,
@@ -170,13 +174,13 @@ MIGRATIONS: list[str] = [
         reversed_at TEXT
     );
     CREATE TABLE receipt_queue (
-        order_guid          TEXT NOT NULL, 
-        upc                 TEXT NOT NULL, 
-        qty                 INTEGER NOT NULL,
-        PRIMARY             KEY (order_guid, upc),
-        action              TEXT,
-        variant_id          TEXT,
-        product_id          TEXT
+        order_guid TEXT NOT NULL,
+        upc        TEXT NOT NULL,
+        qty        INTEGER NOT NULL,
+        action     TEXT,
+        variant_id TEXT,
+        product_id TEXT,
+        PRIMARY KEY (order_guid, upc)
     );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);

@@ -71,6 +71,18 @@ function priceRange(variants) {
 
 const totalQty = (variants) =>
   variants.reduce((n, v) => n + (v.inventory_quantity || 0), 0);
+const TO_LB = { pounds: 1, lb: 1, lbs: 1, ounces: 1 / 16, oz: 1 / 16,
+  kilograms: 2.20462, kg: 2.20462, grams: 1 / 453.592, g: 1 / 453.592 };
+const toLb = (w, u) =>
+  w == null ? null : +(w * (TO_LB[String(u || "").toLowerCase()] ?? 1)).toFixed(4);
+const slug = (x) => String(x || "").toLowerCase().replace(/&/g, " and ")
+  .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+const handleTitle = (t, vendor) => {
+  const m = String(t || "").match(/^(.*?)\s+-\s+(.+)$/);
+  return m && slug(m[2]) === slug(vendor) ? m[1] : t;
+};
+const makeHandle = (vendor, title, type) =>
+  [vendor, handleTitle(title, vendor), type].map(slug).filter(Boolean).join("-");
 
 export class ProductsPage {
   constructor() {
@@ -427,7 +439,7 @@ export class ProductsPage {
                 <td class="num">${Fmt.price(v.price)}</td>
                 <td class="num">${Fmt.price(v.cost)}</td>
                 <td class="num">${Fmt.qty(v.inventory_quantity)}</td>
-                <td>${truncCell((vch[v.variant_id] || []).join(", "))}</td>a
+                <td>${truncCell((vch[v.variant_id] || []).join(", "))}</td>
                 <td>${v.weight != null ? esc(`${v.weight} ${v.weight_unit || ""}`) : "—"}</td>
                 <td>${esc(v.release_date || "—")}</td>
                 <td>${truncCell(listText(v.variant_tags))}</td>
@@ -486,14 +498,7 @@ export class ProductsPage {
       variants: [],
       images: [],
     };
-    const LB = {
-      POUNDS: 1,
-      OUNCES: 1 / 16,
-      KILOGRAMS: 2.20462,
-      GRAMS: 1 / 453.592,
-    };
-    const lbs = (v) =>
-      v.weight == null ? "" : +(v.weight * (LB[v.weight_unit] ?? 1)).toFixed(4);
+    const lbs = (v) => toLb(v.weight, v.weight_unit) ?? "";
     const inp = (name, label, val) => {
       const s = String(val ?? "");
       return `
@@ -579,14 +584,8 @@ export class ProductsPage {
         Toast.error(err.message);
       }
     });
-    body
-      .querySelector("#addv")
-      .addEventListener("click", () =>
-        body
-          .querySelector("#variants")
-          .insertAdjacentHTML("beforeend", vblock({})),
-      );
     body.querySelector("#addv").addEventListener("click", () => {
+      body.querySelector("#variants").insertAdjacentHTML("beforeend", vblock({}));
       if (chs.length) fillCh([...body.querySelectorAll("[data-vid]")].pop());
     });
 
@@ -713,12 +712,7 @@ export class ProductsPage {
         if (old) set("inventory_quantity", old.inventory_quantity);
         row.dataset.mid = old?.media_id || p.images?.[0]?.media_id || "";
         row.dataset.barcode = old?.barcode || "";
-        const LBS = { lb: 1, lbs: 1, oz: 1 / 16, kg: 2.20462, g: 1 / 453.592 };
-        const wl =
-          c.weight != null
-            ? +(c.weight * (LBS[c.weight_unit] ?? 1)).toFixed(4)
-            : null;
-        set("weight", wl ?? 0.0);
+        set("weight", toLb(c.weight, c.weight_unit) ?? 0);
         const t = body.querySelector('#edit-product [name="title"]');
         if (s.title && t) t.value = s.title;
         const pf = (n) => body.querySelector(`#edit-product [name="${n}"]`);
@@ -730,18 +724,8 @@ export class ProductsPage {
         if (df.product_type) pf("product_type").value = df.product_type;
         if (df.category) pf("category").value = df.category;
         if (df.tags && !pf("tags").value.trim()) pf("tags").value = df.tags;
-        const slug = (x) =>
-          String(x || "")
-            .toLowerCase()
-            .replace(/&/g, " and ")
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-|-$/g, "");
-        const tt = pf('title').value, vv = pf('vendor').value;
-        const tm = tt.match(/^(.*?)\s+-\s+(.+)$/);
-        const h = [vv, tm && slug(tm[2]) === slug(vv) ? tm[1] : tt, pf('type').value || pf('product_type').value]
-          .map(slug)
-          .filter(Boolean)
-          .join("-");
+        const h = makeHandle(pf("vendor").value, pf("title").value,
+          pf("type").value || pf("product_type").value);
         if (h) pf("handle").value = h;
         if (c.price != null) {
           set("cost", c.price.toFixed(2));
@@ -754,12 +738,6 @@ export class ProductsPage {
     const afBtn = body.querySelector("#autofill");
     if (afBtn) afBtn.addEventListener("click", autofill);
 
-    const slug = x => String(x || '').toLowerCase().replace(/&/g, ' and ')
-      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const handleTitle = (t, vendor) => {
-      const m = String(t || '').match(/^(.*?)\s+-\s+(.+)$/);
-      return m && slug(m[2]) === slug(vendor) ? m[1] : t;
-    };
     const pf2 = n => body.querySelector(`#edit-product [name="${n}"]`);
     const hf = pf2("handle");
     const note = document.createElement("div");
@@ -773,8 +751,8 @@ export class ProductsPage {
     hf.addEventListener("input", updNote);
     ["vendor", "title", "type", "product_type"].forEach(n =>
       pf2(n).addEventListener("input", () => {
-        hf.value = [pf2("vendor").value, handleTitle(pf2("title").value, pf2("vendor").value),
-        pf2("type").value || pf2("product_type").value].map(slug).filter(Boolean).join("-");
+        hf.value = makeHandle(pf2("vendor").value, pf2("title").value,
+          pf2("type").value || pf2("product_type").value);
         updNote();
       }));
     

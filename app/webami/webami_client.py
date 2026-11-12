@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app import config
-from app.webami.webami_helper import norm
+from app.webami.webami_helper import norm, simplify
 from app.webami.limiter import AdaptiveLimiter
 
 logger = logging.getLogger(__name__)
@@ -185,11 +185,6 @@ def parse_product(page: str) -> dict:
             or (ld.get("image") or [None])[0]
             or _page_image(page)),
     }
-
-
-def simplify(t: str) -> str:
-    t = re.sub(r"[\[\(].*?[\]\)]", " ", t or "")
-    return re.split(r"\s+-\s+", t, maxsplit=1)[0].strip()
 
 
 def parse_search(page: str) -> list[dict]:

@@ -135,19 +135,6 @@ def variant_channels(product_id: str, creds: dict = Depends(get_creds)):
     p = db.get_product_detail(product_id)
     if not p:
         raise HTTPException(404, "Product not found")
-    client = _client(creds)
-    try:
-        return {"items": {v["variant_id"]: client.variant_channels(v["variant_id"])
-                          for v in p["variants"]}}
-    except RuntimeError as e:
-        raise HTTPException(502, str(e))
-
-
-@router.get("/{product_id}/variant-channels")
-def variant_channels(product_id: str, creds: dict = Depends(get_creds)):
-    p = db.get_product_detail(product_id)
-    if not p:
-        raise HTTPException(404, "Product not found")
     cfg = db.get_config()
     client = ShopifyClient(
         creds["shopify_store"], creds["shopify_token"],
@@ -166,11 +153,8 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
         return {"ok": True, "dry_run": True}
     p = body.product.model_dump(exclude_unset=True)
     vs = [v.model_dump(exclude_unset=True) for v in body.variants]
+    client = _client(creds)
     cfg = db.get_config()
-    client = ShopifyClient(
-        creds["shopify_store"], creds["shopify_token"],
-        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
-    )
     try:
         cat = p.pop("category", "")
         if cat:
@@ -178,7 +162,7 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
             p["category_id"] = strip_gid(c["id"])
             p["category_name"] = c["name"]
         img = p.pop("image_url", None)
-        pid = client.create_product(p, cfg, img)
+        pid = client.create_product(p, cfg)
         created = client.create_variants(pid, vs, cfg) if vs else []
         all_ids = [c["id"] for c in client.list_channels()]
         for v, c in zip(vs, created):
@@ -196,11 +180,8 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
 def delete_product(product_id: str, creds: dict = Depends(get_creds)):
     if db.is_dry_run():
         return {"ok": True, "dry_run": True}
+    client = _client(creds)
     cfg = db.get_config()
-    client = ShopifyClient(
-        creds["shopify_store"], creds["shopify_token"],
-        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
-    )
     try:
         client.delete_product(product_id)
     except RuntimeError as e:
@@ -214,10 +195,7 @@ def delete_variant(product_id: str, variant_id: str, creds: dict = Depends(get_c
     if db.is_dry_run():
         return {"ok": True, "dry_run": True}
     cfg = db.get_config()
-    client = ShopifyClient(
-        creds["shopify_store"], creds["shopify_token"],
-        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
-    )
+    client = _client(creds)
     try:
         client.delete_variant(product_id, variant_id)
     except RuntimeError as e:
@@ -370,11 +348,8 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
     all_vs = [v.model_dump(exclude_unset=True) for v in body.variants]
     new_vs = [v for v in all_vs if not v.get("id")]
     vs = [v for v in all_vs if v.get("id")]
+    client = _client(creds)
     cfg = db.get_config()
-    client = ShopifyClient(
-        creds["shopify_store"], creds["shopify_token"],
-        cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION,
-    )
     try:
         if "category" in p:
             cat = client.find_category(p.pop("category"))

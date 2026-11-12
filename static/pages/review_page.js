@@ -161,8 +161,6 @@ export class ReviewPage {
   _draw() {
     const $ = s => this.c.querySelector(s);
     const list = this._shown();
-    const sh = (key, label, cls = '') =>
-      `<th class="${cls}">${label}</th>`;
     $('#rv-body').innerHTML = `
       <thead><tr><th><input type="checkbox" id="rv-hd" ${list.length && list.every(r => this.sel.has(k(r))) ? 'checked' : ''}></th>
         <th>Order</th><th>Action</th><th>WebAMI vs Shopify</th>

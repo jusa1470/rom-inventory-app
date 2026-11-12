@@ -93,7 +93,6 @@ class ShopifyClient:
             )
             available = throttle.get("currentlyAvailable", 1000)
             cost = (body.get("extensions") or {}).get("cost", {})
-            available = throttle.get("currentlyAvailable", 1000)
             restore = throttle.get("restoreRate", 50)
             requested = cost.get("requestedQueryCost", 0)
             logger.debug(
@@ -369,13 +368,15 @@ class ShopifyClient:
             if errs:
                 raise RuntimeError(f"{key}: {errs}")
 
-    def _option_names(self, product_id: str) -> list[str]:
+    def _options(self, product_id: str) -> list[dict]:
         data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
-        return [o["name"] for o in (data.get("product") or {}).get("options", [])]
+        return (data.get("product") or {}).get("options", [])
+
+    def _option_names(self, product_id: str) -> list[str]:
+        return [o["name"] for o in self._options(product_id)]
     
     def _rename_option(self, product_id: str) -> list[str]:
-        data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
-        opts = (data.get("product") or {}).get("options", [])
+        opts = self._options(product_id)
         if len(opts) == 1 and opts[0]["name"] != OPTION_NAME:
             res = self.gql(M_OPTION_UPDATE, {
                 "productId": f"gid://shopify/Product/{product_id}",

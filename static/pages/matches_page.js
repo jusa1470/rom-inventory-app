@@ -1,7 +1,7 @@
 import { API } from "../api.js";
 import { Modal } from "../components/modal.js";
 import { Toast } from "../components/toast.js";
-import { buildPager, debounce, esc, Fmt, thumb, truncCell, variantTitle } from "../util.js";
+import { WEBAMI_URL, buildPager, debounce, esc, Fmt, thumb, truncCell, variantTitle } from "../util.js";
 
 const UPC_LEVEL = "variant";
 const nz = (v) => String(v ?? "").trim().toLowerCase();
@@ -101,7 +101,7 @@ export class MatchesPage {
               const s = p.suggestions[0];
               const link =
                 s && s.href
-                  ? `<a href="https://webami.aent.com${esc(s.href)}" target="_blank" rel="noopener">WebAMI ↗</a>`
+                  ? `<a href="${WEBAMI_URL}${esc(s.href)}" target="_blank" rel="noopener">WebAMI ↗</a>`
                   : "";
               const dash = '<span class="muted">—</span>';
               return `<tr>
@@ -242,7 +242,7 @@ export class MatchesPage {
               <td>${esc(c.product_type || "—")}</td>
               <td class="num">${c.price != null ? Fmt.price(c.price) : "—"}</td>
               <td class="mono">${esc(c.upc)}</td>
-              <td>${c.href ? `<a href="https://webami.aent.com${esc(c.href)}" target="_blank" rel="noopener">↗</a>` : ""}</td>
+              <td>${c.href ? `<a href="${WEBAMI_URL}${esc(c.href)}" target="_blank" rel="noopener">↗</a>` : ""}</td>
               <td>${
                 c.used_by && c.used_by.length
                   ? c.used_by

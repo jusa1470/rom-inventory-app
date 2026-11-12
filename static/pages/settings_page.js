@@ -90,7 +90,6 @@ export class SettingsPage {
             </div>`,
             )
             .join("")}
-            <span class="badge ${s.shopify_token_set ? "badge-new" : "badge-error"}">${s.shopify_token_set ? "Set" : "Missing"}</span></div>
           <div><div class="input-label">Location ID</div><div class="mono">${esc(s.shopify_location_id || "—")}</div></div>
           <div><div class="input-label">Last sync</div><div>${Fmt.datetime(s.last_shopify_sync)}</div></div>
         </div>

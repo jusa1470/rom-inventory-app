@@ -12,9 +12,8 @@ class AdaptiveLimiter:
         min_sample_requests=20,
         improvement=0.05,
     ):
-        self.limit = self.lo = lo
+        self.lo = lo
         self.hi = hi
-
         self.limit = max(lo, min(start, hi))
 
         self.sample_seconds = sample_seconds
