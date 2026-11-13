@@ -54,7 +54,7 @@ class ProductUpdate(BaseModel):
 
 
 def _inch(fmt: str | None) -> str | None:
-    m = _re.search(r'\b(7|10)\s*(?:"|”|in\b|-?inch)', fmt or "", _re.I)
+    m = _re.search(r'\b(\d+)\s*(?:"|”|in\b|-?inch)', fmt or "", _re.I)
     return f"{m.group(1)}-inch" if m and "single" in (fmt or "").lower() else None
 
 
@@ -159,6 +159,7 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
         pid = client.create_product(p, cfg)
         created = client.create_variants(pid, vs, cfg) if vs else []
         all_ids = [c["id"] for c in client.list_channels()]
+        client.publish_product(pid, all_ids)
         for v, c in zip(vs, created):
             client.set_variant_channels(
                 c["id"], v["channels"] if v.get("channels") is not None else all_ids)
@@ -213,11 +214,6 @@ def by_upc(upc: str, creds: dict = Depends(get_creds)):
     typ = "Vinyl" if inch else SHOPIFY_TYPE.get((w.get("product_type") or "").strip().lower(), "")
     cost = w.get("price")
     color = s["color"]
-    if inch:
-        c = _re.sub(r"(?i)\s*vinyl$", "", color or "").strip()
-        words = [x for x in c.split() if x.lower() not in ("and", "&", "none")]
-        c = " ".join(words) if words and c.lower() != "none" else ""
-        color = f"{c} {inch}".strip().title().replace("-Inch", "-inch")
     var = {
         "edition": s["edition"], "color": color, "attributes": s["attributes"],
         "upc": upc, "description": w.get("description"),
@@ -233,7 +229,7 @@ def by_upc(upc: str, creds: dict = Depends(get_creds)):
     prod = {k: v for k, v in prod.items() if v}
     ve = db.find_variant_by_upc(upc)
     pe = ({"product_id": ve["product_id"], "title": ve["product_title"]} if ve
-        else db.find_product(prod["title"], vendor))
+        else db.find_product(prod["title"], vendor, prod.get("type", typ)))
     return {"image_url": w.get("image_url"), "webami_title": w["title"],
             "prefill": {"product": prod, "variant": var},
             "variant_exists": ve, "product_exists": pe}
@@ -290,7 +286,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
                               "weight_unit": page.get("weight_unit"),
                               "product_type": page.get("product_type") or r["format"],
                               "upc": r["upc"], "price": page.get("price"),
-                              "canon_artist": db.alias_for(page.get("artist") or r["artist"]),
+                              "canon_artist": db.canon(page.get("artist") or r["artist"]),
                               "tier": 2, "source": "search (page verified)",
                               "kw_extra": extra,
                               "artist_match": (page.get("artist") or r["artist"]).lower()

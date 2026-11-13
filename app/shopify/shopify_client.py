@@ -11,6 +11,7 @@ from app.shopify.queries import (
     M_BULK_CANCEL,
     M_BULK_RUN,
     M_INVENTORY_SET,
+    M_MEDIA_CREATE,
     M_METAFIELDS_DELETE,
     M_OPTION_UPDATE,
     M_PRODUCT_CREATE,
@@ -23,6 +24,7 @@ from app.shopify.queries import (
     M_VARIANTS_DELETE,
     M_VARIANTS_UPDATE,
     Q_BULK_STATUS,
+    Q_MEDIA_STATUS,
     Q_PRODUCT_OPTIONS,
     Q_PUBLICATIONS,
     Q_TAXONOMY,
@@ -293,6 +295,14 @@ class ShopifyClient:
                 continue
             data = self.gql(mut, {"id": gid, "input": [{"publicationId": i} for i in s]})
             _check(data, key)
+    
+    def publish_product(self, product_id: str, ids: list[str]) -> None:
+        if not ids:
+            return
+        data = self.gql(M_PUBLISH, {
+            "id": f"gid://shopify/Product/{product_id}",
+            "input": [{"publicationId": i} for i in ids]})
+        _check(data, "publishablePublish")
 
     def _options(self, product_id: str) -> list[dict]:
         data = self.gql(Q_PRODUCT_OPTIONS, {"id": f"gid://shopify/Product/{product_id}"})
@@ -359,6 +369,24 @@ class ShopifyClient:
             }})
             _check(data, "inventorySetQuantities")
     
+    def upload_image(self, product_id: str, url: str, timeout: int = 60) -> str:
+        res = self.gql(M_MEDIA_CREATE, {
+            "productId": f"gid://shopify/Product/{product_id}",
+            "media": [{"originalSource": url, "mediaContentType": "IMAGE"}]}
+        ).get("productCreateMedia") or {}
+        if res.get("mediaUserErrors"):
+            raise RuntimeError(f"productCreateMedia: {res['mediaUserErrors']}")
+        mid = res["media"][0]["id"]
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            st = (self.gql(Q_MEDIA_STATUS, {"id": mid}).get("node") or {}).get("status")
+            if st == "READY":
+                return mid
+            if st == "FAILED":
+                raise RuntimeError(f"Image upload failed: {url}")
+            time.sleep(1)
+        raise RuntimeError(f"Image upload timed out: {url}")
+    
     def create_variants(self, product_id: str, variants: list[dict], cfg: dict,
                         replace_default: bool = True) -> list[dict]:
         options = self._rename_option(product_id)
@@ -377,8 +405,6 @@ class ShopifyClient:
             if len(parts) != len(options):
                 raise RuntimeError(f"Variant title needs {len(options)} part(s) separated by ' / '")
             v["optionValues"] = [{"optionName": o, "name": n} for o, n in zip(options, parts)]
-            if f.get("image_url"):
-                v["mediaSrc"] = [f["image_url"]]
             mfs = _mfs(f, BULK_VARIANT_MF, cfg)
             if mfs:
                 v["metafields"] = mfs
@@ -392,9 +418,17 @@ class ShopifyClient:
         res = data.get("productVariantsBulkCreate") or {}
         if res.get("userErrors"):
             raise RuntimeError(f"variantsCreate: {res['userErrors']}")
-        links = [{"variantId": n["id"], "mediaIds": [f"gid://shopify/MediaImage/{f['media_id']}"]}
-                for n, f in zip(res["productVariants"], variants)
-                if f.get("media_id") and not f.get("image_url")]
+        cache: dict[str, str] = {}
+        links = []
+        for n, f in zip(res["productVariants"], variants):
+            if f.get("image_url"):
+                url = f["image_url"]
+                if url not in cache:
+                    cache[url] = self.upload_image(product_id, url)
+                links.append({"variantId": n["id"], "mediaIds": [cache[url]]})
+            elif f.get("media_id"):
+                links.append({"variantId": n["id"],
+                              "mediaIds": [f"gid://shopify/MediaImage/{f['media_id']}"]})
         if links:
             r = self.gql(M_VARIANT_MEDIA, {
                 "productId": f"gid://shopify/Product/{product_id}", "variantMedia": links})

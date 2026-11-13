@@ -24,8 +24,8 @@ _ATTRS = [
     "Digital Download Card", "Mask Cover", "Bonus Tracks", "Bonus Track", "Added Track",
     "Bonus LP", "Bonus CD", "Bonus 7-Inch", "Poster", "Lithograph", "Sticker", "Stickers",
     "Signed Polaroid", "Signed Postcard", "Signed", "Alternative Cover", "Alternate Artwork",
-    "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Photo / Photo Card",
-    "Calendar"
+    "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Photo", "Photo Card",
+    "Calendar", "Die-Cut"
 ]
 _COLOR_WORDS = [
     "black", "white", "red", "blue", "green", "yellow", "pink", "orange", "purple", "gold",
@@ -40,7 +40,7 @@ _COLOR_WORDS = [
     "apple", "flame", "seablue", "sea", "sky", "canary", "bone", "bubblegum", "splash",
     "custard", "forest", "ice", "sand", "sunrise", "sunset", "sun", "sangria", "candy cane",
     "vanilla", "citrus", "seafoam", "royal", "blush", "ocean", "evergreen", "moonstone",
-    "eggshell", "coffee", "heavyweight", "ecorecord", "recycled", "biovinyl", "organic earth",
+    "eggshell", "coffee", "audiophile", "heavyweight", "ecorecord", "recycled", "biovinyl", "organic earth",
 ]
 _COLOR_RE = (r"(?:(?:%s)(?:\s+|/|-)?)+\s*(?:vinyl|picture\s+disc)?"
              % "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)))
@@ -53,7 +53,7 @@ def _alt(items):
 _FEAT = re.compile(
     r"(?<![\w])(?:(?:\d+(?:st|nd|rd|th)\s+anniversary(?:\s+(?:deluxe|remaster|reissue))?)|"
     r"(?:\d{4}\s+(?:remaster|reissue|repress|stereo))|(?:\d+\s+year)|"
-    r"(?:%s)|(?:%s)|(?:\d{3}\s?g(?:ram)?\s+(?:%s)|\d{3}\s?g(?:ram)?)|"
+    r"(?:%s)|(?:%s)|(?:\d{3}[\s-]?g(?:rams?|m)?\s+(?:%s)|\d{3}[\s-]?g(?:rams?|m)?)|"
     r"(?:%s)|picture\s+disc|zoetrope)(?![\w])"
     % (_alt(_EDITIONS), _alt(_ATTRS), _COLOR_RE, _COLOR_RE), re.I)
 
@@ -65,7 +65,7 @@ def norm(s) -> str:
 
 _IGNORE_KW = {"black", "vinyl", "lp", "standard", "none", "explicit"}
 _COLOR_ONLY = re.compile(
-    rf"^(?:{_COLOR_RE}|\d{{3}}\s?g(?:ram)?(?:\s+{_COLOR_RE})?|picture\s+disc|zoetrope)$", re.I)
+    rf"^(?:{_COLOR_RE}|\d{{3}}[\s-]?g(?:rams?|m)?(?:\s+{_COLOR_RE})?|picture\s+disc|zoetrope)$", re.I)
 _ATTR_SET = {norm(a) for a in _ATTRS}
 _ED_SET = {norm(e) for e in _EDITIONS}
 
@@ -103,3 +103,12 @@ _LBS = {"lb": 1, "lbs": 1, "oz": 1 / 16, "kg": 2.20462, "g": 1 / 453.592}
 
 def to_lbs(w, unit):
     return None if w is None else round(w * _LBS.get((unit or "").lower(), 1), 4)
+
+
+def with_inch(fmt, color):
+    m = re.search(r'\b(\d+)\s*(?:"|”|in\b|-?inch)', fmt or "", re.I)
+    if not (m and "single" in (fmt or "").lower()):
+        return color
+    pre = f"{m.group(1)}-inch Single"
+    c = (color or "").strip()
+    return pre if not c or c.lower() == "none" else f"{pre}, {c}"

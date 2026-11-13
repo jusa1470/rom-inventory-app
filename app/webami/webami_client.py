@@ -159,7 +159,15 @@ def parse_product(page: str) -> dict:
             break
     
     music = (fmt or "").strip().lower() in ("lp", "cd", "cassette")
-    artist = _val(page, "artist") if music else None
+    artist = None
+    if music:
+        for li in soup.select("li"):
+            sp = li.find("span")
+            if sp and sp.get_text(strip=True).rstrip(":").lower() == "artist":
+                a = li.find("a")
+                artist = _txt(a) if a else li.get_text(" ", strip=True)[len(sp.get_text(strip=True)):].strip()
+                break
+        artist = artist or _val(page, "artist")
     wt, wu = _weight(_info(soup, "Weight"))
     return {
         "title": _txt(soup.select_one("h2.title-h2")) or _val(page, "album"),

@@ -342,8 +342,12 @@ def find_variant_by_upc(upc: str):
         "WHERE v.upc=? LIMIT 1", (upc,)).fetchone())
 
 
-def find_product(title: str, vendor: str):
-    return row(get_conn().execute(
-        "SELECT product_id, title FROM shopify_products "
-        "WHERE title=? COLLATE NOCASE AND vendor=? COLLATE NOCASE LIMIT 1",
-        (title, vendor)).fetchone())
+def find_product(title: str, vendor: str, type: str = ""):
+    from app.webami.webami_helper import norm
+    t, v, ty = norm(title), (vendor or "").strip().lower(), (type or "").lower()
+    for r in get_conn().execute(
+            "SELECT product_id, title, vendor, type, product_type FROM shopify_products"):
+        if (norm(r["title"]) == t and (r["vendor"] or "").strip().lower() == v
+                and (r["type"] or r["product_type"] or "").lower() == ty):
+            return {"product_id": r["product_id"], "title": r["title"]}
+    return None

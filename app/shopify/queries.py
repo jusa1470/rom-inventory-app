@@ -197,3 +197,16 @@ mutation Unpub($id: ID!, $input: [PublicationInput!]!) {
   publishableUnpublish(id: $id, input: $input) { userErrors { field message } }
 }
 """
+
+M_MEDIA_CREATE: str = """
+mutation MediaCreate($productId: ID!, $media: [CreateMediaInput!]!) {
+  productCreateMedia(productId: $productId, media: $media) {
+    media { id status }
+    mediaUserErrors { field message }
+  }
+}
+"""
+
+Q_MEDIA_STATUS: str = """
+query($id: ID!) { node(id: $id) { ... on MediaImage { id status } } }
+"""

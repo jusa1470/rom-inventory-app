@@ -716,7 +716,8 @@ export class ProductsPage {
         const t = body.querySelector('#edit-product [name="title"]');
         if (s.title && t) t.value = s.title;
         const pf = (n) => body.querySelector(`#edit-product [name="${n}"]`);
-        if (c.canon_artist) pf('vendor').value = c.canon_artist;
+        const art = c.canon_artist;
+        if (art) pf('vendor').value = art;
         if (c.genres && !pf('genres').value.trim())
           pf("genres").value = c.genres.split(",").join(", ");
         const df = c.defaults || {};
@@ -782,6 +783,7 @@ export class ProductsPage {
       width: "96vw",
       buttons: [
         { label: "Save", cls: "btn-primary", onClick: save },
+        ...(onSaved ? [{ label: "Skip", onClick: onSaved }] : []),
         { label: "Cancel", onClick: Modal.close },
       ],
     });

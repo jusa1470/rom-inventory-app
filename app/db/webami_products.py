@@ -143,7 +143,7 @@ def suggest_local(p: dict, idx: dict | None = None) -> list[dict]:
                             "tier": 1 if w["wmsid"] else 3,
                             "source": "orders" if w["wmsid"] else "order line only",
                             "artist_match": key(pv) == key(wa),
-                            "canon_artist": alias_for(w["artist"], amap)})
+                            "canon_artist": canon(w["artist"], amap)})
     return out
 
 

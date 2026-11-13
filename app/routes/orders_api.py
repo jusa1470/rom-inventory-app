@@ -69,6 +69,8 @@ def _build(wp: dict, upc: str, qty: int = 0):
     v = {"title": db.variant_title(s), "upc": upc, "inventory_quantity": qty,
          "description": wp.get("description") or "",
          "release_date": wp.get("release_date") or ""}
+    if wp.get("image_url"):
+        v["image_url"] = wp["image_url"]
     if wp.get("price") is not None:
         v |= {"cost": f"{wp['price']:.2f}", "price": f"{db.sell_price(wp['price']):.2f}"}
     if wp.get("weight") is not None:
@@ -150,6 +152,7 @@ def _apply(client, cfg, r: dict, pl: dict, cost: float | None, titles: bool = Fa
         pid = pl["product_id"]
     else:
         pid = client.create_product(p, cfg)
+        client.publish_product(pid, [c["id"] for c in client.list_channels()])
         db.add_local_product(pid, p)
     try:
         made = client.create_variants(pid, [variant], cfg)

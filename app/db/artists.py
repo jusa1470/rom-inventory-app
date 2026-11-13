@@ -22,7 +22,7 @@ def canon(name, amap: dict | None = None) -> str:
 
 def add_alias(alias: str, canonical: str) -> None:
     a, c = key(alias), (canonical or "").strip()
-    if not a or not c or a == key(c):
+    if not a or not c or a == c:
         raise ValueError("Alias and canonical name must differ")
     with transaction() as conn:
         conn.execute("INSERT OR REPLACE INTO artist_aliases (alias_norm, alias, canonical) "

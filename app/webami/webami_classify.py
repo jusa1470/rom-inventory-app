@@ -3,7 +3,7 @@ Pure functions; imports only the helper."""
 import re
 
 from app.webami.webami_helper import (
-    _ATTR_SET, _COLOR_ONLY, _COLOR_WORDS, _ED_SET, _FEAT, _IGNORE_KW, norm)
+    _ATTR_SET, _COLOR_ONLY, _COLOR_WORDS, _ED_SET, _FEAT, _IGNORE_KW, norm, with_inch)
 
 
 # ── keyword matching (Shopify variant vs WebAMI product) ─────────────
@@ -58,16 +58,21 @@ _COUNTRY = {
 _ALIAS = {"iex": "Indie Exclusive", "ie": "Indie Exclusive"}
 _SKIP_BR = re.compile(r"explicit|soundtrack|\bost\b|\bvol\b|\bpart\b|\bfeat|^\s*rsd\s*$|colou?r[- ]in[- ]colou?r", re.I)
 _KEEP = re.compile(r"original\s+(?:\w+\s+){0,3}?(?:score|soundtrack|cast recording)", re.I)
-_HALF = re.compile(r"(?i)half\s+(\w+)\s*/\s*half\s+(\w+)")
+_HALF = re.compile(r"half\s+(\w+)\s*/\s*half\s+(\w+)", re.I)
+_XP = re.compile(r"explicit\s+(?:content|cover|lyrics|version|artwork)"
+                 r"(?:\s*/\s*(?:content|cover|lyrics|version|artwork))*", re.I)
 _EXP = re.compile(r"[\[\(]?\s*explicit(?:\s+(?:content|cover|lyrics|version|artwork))*\s*[\]\)]?", re.I)
 _GENERIC = re.compile(
-    r"^(?:the\s+)?(?:very\s+|ultimate\s+|absolute\s+)?(?:best(?:\s+of)?|greatest\s+hits|"
-    r"(?:#?\d+\s+)?(?:number\s+ones?(?:\s+hits)?|hits)|essential|definitive|collection|"
-    r"anthology|singles|gold|live)(?:\s+(?:vol(?:ume)?\.?\s*)?\d+)?$", re.I)
+    r"^(?:the\s+)?(?:very\s+|ultimate\s+|absolute\s+|essential\s+|definitive\s+)?"
+    r"(?:best(?:\s+of)?|greatest(?:\s+hits)?|(?:#?\d+\s+)?(?:number\s+(?:ones?|1)(?:\s+hits)?|hits)|"
+    r"essential|definitive|collection|anthology|singles|gold|live)"
+    r"(?:\s+(?:vol(?:ume)?\.?\s*)?\d+)?$", re.I)
 
 
 def _cap(s: str) -> str:
-    return re.sub(r"(^|[\s\-])([a-z])", lambda m: m.group(1) + m.group(2).upper(), s)
+    s = re.sub(r"(^|[\s\-])([A-Za-z])([A-Za-z]*)",
+               lambda m: m.group(1) + m.group(2).upper() + m.group(3).lower(), s)
+    return re.sub(r"(?i)\becorecord\b", "EcoRecord", s)
 
 
 def _suffix(words: list[str]) -> list[str]:
@@ -97,6 +102,11 @@ def _desc_color(d: str):
         ws = _suffix([x for x in m.group(1).split() if x.lower() != "colored"])
         if ws:
             return " ".join(ws), False
+    m = re.search(r"((?:[A-Za-z&\-]+\s+){1,3})(?:variant|colou?r)\b", d, re.I)
+    if m:
+        ws = _suffix(m.group(1).split())
+        if ws:
+            return " ".join(ws), False
     for m in re.finditer(r"((?:[A-Za-z&\-]+\s+){1,5})vinyl\b", d, re.I):
         ws = _suffix([x for x in m.group(1).split() if x.lower() not in ("colored", "coloured", "color", "colour")])
         if ws:
@@ -118,8 +128,6 @@ def _join(cols: list[str], hint: str = ""):
     base = [x for i, x in enumerate(base) if not any(
         ws(x) < ws(y) or (ws(x) == ws(y) and j < i) for j, y in enumerate(base) if j != i)]
     jb = ", ".join(base[:-1]) + " & " + base[-1] if len(base) > 2 else " & ".join(base)
-    if eco:
-        base = [x for x in base if x.lower() != "clear"]
     res = " ".join(x for x in (jb, *fin) if x)
     if eco:
         return (res + " EcoRecord").strip()
@@ -128,8 +136,7 @@ def _join(cols: list[str], hint: str = ""):
 
 def suggest_parts(w: dict) -> dict:
     """Suggested product title, edition, color, attributes from a WebAMI product."""
-    _XP = r"(?i)explicit\s+(?:content|cover|lyrics|version|artwork)(?:\s*/\s*(?:content|cover|lyrics|version|artwork))*"
-    cl = lambda s: _HALF.sub(r"Half \1 & Half \2", _EXP.sub(" ", re.sub(_XP, " ", s or "")))
+    cl = lambda s: _HALF.sub(r"Half \1 & Half \2", _EXP.sub(" ", _XP.sub(" ", s or "")))
     t, d, ft = cl(w.get("title")), cl(w.get("description")), cl(w.get("features"))
     hint = ""
     parts = re.split(r"\s+-\s+", re.sub(r"[\[\(][^\]\)]*[\]\)]", " ", t), maxsplit=1)
@@ -137,13 +144,15 @@ def suggest_parts(w: dict) -> dict:
     tail = parts[1].strip() if len(parts) > 1 else ""
     ed: list[str] = []
     unk: list[str] = []
+    keeps: list[str] = []
     at: list[str] = []
     cols: list[str] = []
     st = {"imp": False, "cc": None, "col": False, "pic": False, "wt": None,
-          "anniv": None, "gen": None}
+          "anniv": None, "gen": None, "inch": None}
 
     def addat(x):
-        if x and norm(x) not in {norm(y) for y in at}:
+        sg = lambda s: re.sub(r"s$", "", norm(s))
+        if x and sg(x) not in {sg(y) for y in at}:
             at.append(x)
 
     def setann(m):
@@ -162,6 +171,12 @@ def suggest_parts(w: dict) -> dict:
         if re.search(r"picture disc|zoetrope", f, re.I):
             st["pic"] = True
             return
+        if re.fullmatch(r"\d+\s*rpm", f, re.I):
+            return
+        m = re.match(r'(?i)^(?<!bonus )(\d+)\s*(?:"|”|-?\s*inch|in)\s*(?:vinyl|single|ep)?$', f)
+        if m and not re.search(r"(?i)bonus", f):
+            st["inch"] = f"{m.group(1)}-inch"
+            return
         m = re.match(r"(.*?)\s*-\s*import$", f, re.I)
         if m or n == "import":
             st["imp"] = True
@@ -171,10 +186,13 @@ def suggest_parts(w: dict) -> dict:
         if re.search(r"\d+\s*lp\s*\+\s*7\b", f, re.I):
             addat("Bonus 7-inch Vinyl")
             return
-        m = re.match(r"(\d{3})[\s-]?(?:g|gm|grams?)\b", f, re.I)
+        m = re.match(r"(\d{3})[\s-]?(?:g|gm|grams?)\b\s*", f, re.I)
         if m:
             st["wt"] = st["wt"] or f"{m.group(1)}g"
-            return
+            f = f[m.end():].strip()
+            n = norm(f)
+            if not n:
+                return
         if re.match(r"(with\s+)?bonus\s+7", f, re.I):
             addat("Bonus 7-inch Vinyl")
             return
@@ -198,11 +216,10 @@ def suggest_parts(w: dict) -> dict:
         if n in _ATTR_SET or n == "boxed set":
             addat(f)
             return
-        if _COLOR_ONLY.match(f) or st["col"]:
+        if _COLOR_ONLY.match(f):
             cols.append(f)
             return
-        if raw:
-            unk.append(f)
+        unk.append((f, raw))
 
     # 1. title: brackets, " - tail", inline color before "Vinyl"
     if re.search(r"(?i)\s+(?:ep|extended play)$", base):
@@ -210,9 +227,25 @@ def suggest_parts(w: dict) -> dict:
         addat("Extended Play")
     for b in re.findall(r"[\[\(]([^\]\)]+)[\]\)]", t):
         if _KEEP.match(b.strip()):
+            keeps.append(f"({b.strip()})")
+            continue
+        if re.search(r"(?i)\bversion\b", b):
+            ed.append(b.strip())
+            continue
+        if re.fullmatch(r"(?i)\s*(continued|part\s*\w+|pt\.?\s*\w+)\s*", b):
             base = f"{base} ({b.strip()})"
             continue
         if _SKIP_BR.search(b):
+            continue
+        if re.fullmatch(r"\s*\d+\s*rpm\s*", b, re.I):
+            continue
+        m = re.match(r'(?i)^\s*(.*?)\s*(\d+)\s*(?:"|”|-?inch|in)\s*(?:ep|single|lp)?\s*$', b)
+        if m:
+            if m.group(1):
+                hint += " " + m.group(1)
+            st["inch"] = f"{m.group(2)}-inch"
+            if re.search(r"(?i)\bep\b", b):
+                addat("Extended Play")
             continue
         b2 = re.sub(r"(?i)\b(vinyl|lp)\b", "", b).strip()
         if b2 != b.strip():
@@ -222,28 +255,35 @@ def suggest_parts(w: dict) -> dict:
         take(b, True)
     tc = None
     if tail:
-        if norm(tail) in _ED_SET or _ORD.search(tail):
+        tw = re.sub(r"(?i)\b(colored|coloured|vinyl|lp)\b", " ", tail).split()
+        if norm(tail) in _ED_SET or norm(tail) in _ATTR_SET or _ORD.search(tail):
             take(tail)
+        elif not tw:
+            st["col"] = True
+        elif re.search(r"(?i)\b(vinyl|lp)$", tail) or all(x.lower() in _CV for x in tw):
+            tc = " ".join(tw)
         else:
-            tc = re.sub(r"\s+", " ", re.sub(r"(?i)\b(colored|vinyl)\b", "", tail)).strip()
+            base = f"{base} - {tail}"
     if not tc and re.search(r"\svinyl(\s+lp)?$", base, re.I):
         ws = re.sub(r"\s+(colored\s+)?vinyl(\s+lp)?$", "", base, flags=re.I).split()
         k = 0
         while k < len(ws) - 1 and ws[-1 - k].lower() in _CV:
             k += 1
-        if k and k < len(ws) - 1:
-            k += 1
         tc = " ".join(ws[-k:]) if k else None
         base = " ".join(ws[:-k] if k else ws)
+    if keeps:
+        base = f"{base} {' '.join(keeps)}"
 
     # 2. features field
     for c in re.split(r"[;,/]", re.sub(r"^\(|\)$", "", ft.strip())):
         take(c)
     cn = []
-    for x in unk:
-        if not re.search(r"\d|edition|remaster|reissue|series|version", x, re.I) and (cols or st["col"]):
+    for x, raw in unk:
+        # if (cols or st["col"]) and len(x.split()) <= 3 and not re.search( ChatGPT suggestion
+        if (cols or st["col"]) and norm(x) != "vinyl" and len(x.split()) <= 3 and not re.search(
+                r"\d|edition|remaster|reissue|series|version", x, re.I):
             cn.append(x)
-        else:
+        elif raw:
             ed.append(x)
 
     # 3. description: editions and colors only (plus a few attribute patterns below)
@@ -279,9 +319,18 @@ def suggest_parts(w: dict) -> dict:
         if not cw or cw <= {x.lower() for x in hc.split() if x != "&"}:
             c = hc
     if cn:
+        eco = [x for x in cn if re.match(r"(?i)^eco[- ]?(vinyl|record)?$", x.strip())]
+        cn = [x for x in cn if x not in eco]
         c = " ".join(cn + ([c] if c else []))
+        if eco:
+            c = f"{c} Eco".strip()
+    if c:
+        c = re.sub(r"(?i)^((the|a|an|in|on|with|of|and)\s+)+", "", c).strip() or None
     if c:
         c = re.sub(r"(?i)\s+and\s+", " & ", c)
+        c = re.sub(r"(?i)\b(limited|exclusive|edition)\b\s*", "", c).strip()
+        c = re.sub(r"(?i)^.*\bon\s+(?=\S)", "", c).strip()
+        c = re.sub(r"(?i)^\d+\s*-?\s*(lp|cd)s?(\s+set)?\s*", "", c).strip()
     if st["pic"]:
         color = "Zoetrope Picture Disc Vinyl" if re.search("zoetrope", t + d, re.I) \
             else "Picture Disc Vinyl"
@@ -316,11 +365,12 @@ def suggest_parts(w: dict) -> dict:
 
     # attributes
     m = re.search(r"\b(\d{3})[\s-]?(?:g|gm|grams?)\b", d, re.I)
-    wt = st["wt"] or (f"{m.group(1)}g" if m else None)
+    vin = (w.get("product_type") or "").lower() not in ("cd", "cassette")
+    wt = (st["wt"] or (f"{m.group(1)}g" if m else None)) if vin else None
     m = re.search(r"\b(\d)\s*-?\s*x?\s*lp\b|\b(double|triple)\b(?:\s+\w+){0,3}?\s+(?:vinyl|lp)\b",
                   d, re.I)
     n = 0
-    if m:
+    if m and vin:
         n = int(m.group(1)) if m.group(1) else {"double": 2, "triple": 3}[m.group(2).lower()]
     extra: list[str] = []
     if re.search(r"digital download with bonus tracks", d, re.I):
@@ -332,10 +382,15 @@ def suggest_parts(w: dict) -> dict:
         extra.append("Laser Etched")
     imp = ([f"Import ({st['cc']})" if st["cc"] else "Import"] if st["imp"] else [])
     attrs = ([wt] if wt else []) + ([f"{n}Lp's"] if n >= 2 else []) + at + extra + imp
+    base = re.sub(r"(?i)\s*[-–—]\s*(limited\s+)?\d*\s*(lp|cd|cassette)s?(\s+set)?\s*$", "", base).strip()
     art = (w.get("artist") or "").strip()
     if art and _GENERIC.match(base.strip()) and norm(art) not in norm(base):
         base = f"{base} - {art}"
 
+    color = with_inch(w.get("product_type"), color)
+    if st["inch"] and not color.lower().startswith(st["inch"]):
+        col = "" if color == "None" else color
+        color = f"{st['inch']}, {col}" if col else st["inch"]
     return {"title": base, "edition": edition, "color": color,
             "attributes": ", ".join(attrs) or "None"}
 
