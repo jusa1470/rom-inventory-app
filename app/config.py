@@ -18,3 +18,15 @@ WEBAMI_MATCH_MIN = 0.7
 OAUTH_REDIRECT_URI = os.environ.get(
     "RECORDSYNC_OAUTH_REDIRECT", "http://localhost:8000/api/auth/callback"
 )
+
+# media=True enables the media flow; category = Shopify taxonomy name
+PRODUCT_CATEGORIES = [
+    {"name": "Vinyl", "media": True, "category": ""},
+    {"name": "CD", "media": True, "category": ""},
+    {"name": "Cassette", "media": True, "category": ""},
+    {"name": "Other", "media": False, "category": ""},
+]
+
+
+
+

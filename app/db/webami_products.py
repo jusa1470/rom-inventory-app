@@ -297,3 +297,60 @@ def search_shopify(q: str, limit: int = 15) -> list[dict]:
     for p in out:
         p["variants"] = _variants(conn, p["product_id"])
     return out
+
+
+def fuzzy_shopify(title: str, vendor: str = "", type: str = "", used: bool = False, limit: int = 8) -> list[dict]:
+    conn = get_conn()
+    t, v = simplify(title), vendor or ""
+    if len(norm(t)) < 2 and len(norm(v)) < 2:
+        return []
+    out = []
+    where = "where 1=1"
+    if type:
+        where += " and (lower(type) = ? or lower(product_type) = ?)"
+    if used:
+        where += " and (lower(tags) like '%used%' or lower(title) like '% - u')"
+    else:
+        where += " and (lower(tags) not like '%used%' and lower(title) not like '% - u')"
+    for p in rows(conn.execute(
+            "SELECT product_id, title, vendor, type, product_type, category_name, genres, tags "
+            "FROM shopify_products " + where, [type.lower(), type.lower()] if type else None)):
+        ts = sim(simplify(p["title"]), t) if t else 0
+        if t and norm(t) in norm(p["title"]):
+            ts = max(ts, 0.8)
+        vs = sim(p["vendor"], v) if v else 0
+        score = (ts + vs) / ((1 if t else 0) + (1 if v else 0))
+        if score >= 0.5:
+            out.append({**p, "score": score})
+    out.sort(key=lambda x: -x["score"])
+    out = out[:limit]
+    for p in out:
+        p["variants"] = _variants(conn, p["product_id"])
+    return out
+
+def fuzzy_webami(title: str, vendor: str = "", type: str = "", limit: int = 8) -> list[dict]:
+    t, v = simplify(title), vendor or ""
+    if len(norm(t)) < 2 and len(norm(v)) < 2:
+        return []
+    amap = alias_map()
+    out = []
+    for w in rows(get_conn().execute(
+            "SELECT id, title, artist, product_type, upc, price, description, release_date, "
+            "image_url, genres, features, weight, weight_unit, href FROM webami_products "
+            "WHERE COALESCE(upc,'')!=''")):
+        if not format_ok(type, w["product_type"]):
+            continue
+        ts = sim(simplify(w["title"]), t) if t else 0
+        if t and norm(t) in norm(w["title"]):
+            ts = max(ts, 0.8)
+        vs = sim(canon(w["artist"], amap), v) if v else 0
+        score = (ts + vs) / ((1 if t else 0) + (1 if v else 0))
+        if score >= 0.5:
+            out.append({**w, "score": score})
+    out.sort(key=lambda x: -x["score"])
+    out = out[:limit]
+    for w in out:
+        w["suggested"] = suggest_parts(w)
+        w["canon_artist"] = canon(w["artist"], amap)
+    decorate_candidates("", out)
+    return out

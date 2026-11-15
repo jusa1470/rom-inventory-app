@@ -25,7 +25,7 @@ _ATTRS = [
     "Bonus LP", "Bonus CD", "Bonus 7-Inch", "Poster", "Lithograph", "Sticker", "Stickers",
     "Signed Polaroid", "Signed Postcard", "Signed", "Alternative Cover", "Alternate Artwork",
     "Import", "Extended Play", "Mono", "With Book", "With Booklet", "Photo", "Photo Card",
-    "Calendar", "Die-Cut"
+    "Photo Book","Calendar", "Die-Cut", "Photo Booklet"
 ]
 _COLOR_WORDS = [
     "black", "white", "red", "blue", "green", "yellow", "pink", "orange", "purple", "gold",
@@ -41,6 +41,7 @@ _COLOR_WORDS = [
     "custard", "forest", "ice", "sand", "sunrise", "sunset", "sun", "sangria", "candy cane",
     "vanilla", "citrus", "seafoam", "royal", "blush", "ocean", "evergreen", "moonstone",
     "eggshell", "coffee", "audiophile", "heavyweight", "ecorecord", "recycled", "biovinyl", "organic earth",
+    "blob", "glass", "hardwood"
 ]
 _COLOR_RE = (r"(?:(?:%s)(?:\s+|/|-)?)+\s*(?:vinyl|picture\s+disc)?"
              % "|".join(re.escape(c) for c in sorted(_COLOR_WORDS, key=len, reverse=True)))

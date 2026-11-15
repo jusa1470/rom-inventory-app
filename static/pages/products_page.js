@@ -143,91 +143,266 @@ export class ProductsPage {
     await this._load();
   }
 
-  _openNew() {
+  async _openNew() {
+    try { this._opts ||= await API.get("/api/products/new-options"); }
+    catch (e) { return Toast.error(e.message); }
+    const cats = this._opts.categories;
+    const body = document.createElement("div");
+    body.innerHTML = `<div class="input-group"><label class="input-label">Product type</label>
+      <select class="input" name="cat"><option value="">Select…</option>
+      ${cats.map((c, i) => `<option value="${i}">${esc(c.name)}</option>`).join("")}</select></div>`;
+    Modal.open({ title: "New product", body, width: "480px", buttons: [
+      { label: "Next", cls: "btn-primary", onClick: () => {
+        const c = cats[body.querySelector("[name=cat]").value];
+        if (!c) return Toast.error("Select a type");
+        if (!c.media) return Toast.info("Not supported yet");
+        this._openCondition(c);
+      } },
+      { label: "Cancel", onClick: Modal.close },
+    ] });
+  }
+  
+  _openCondition(cat) {
+    const body = document.createElement("div");
+    body.innerHTML = `<div class="muted">${esc(cat.name)}</div>`;
+    Modal.open({ title: "New or used?", body, width: "420px", buttons: [
+      { label: "New", cls: "btn-primary", onClick: () => this._openUpc(cat) },
+      { label: "Used", cls: "btn-primary", onClick: () => this._openManual(cat, true) },
+      { label: "Back", onClick: () => this._openNew() },
+      { label: "Cancel", onClick: Modal.close },
+    ] });
+  }
+  
+  _openUpc(cat) {
+    const body = document.createElement("div");
+    body.innerHTML = `<div class="input-group"><label class="input-label">UPC(s)</label>
+      <textarea class="input scope-box" name="upc" placeholder="One or more, comma/line separated"></textarea></div>
+      <div id="n-st" class="muted" style="margin-top:8px"></div>`;
+    const go = async (btn) => {
+      const upcs = [...new Set(body.querySelector("[name=upc]").value.split(/[,\s]+/).filter(Boolean))];
+      if (!upcs.length) return Toast.error("UPC required");
+      btn.disabled = true;
+      const st = body.querySelector("#n-st"), items = [];
+      for (const [i, u] of upcs.entries()) {
+        st.innerHTML = `<span class="spinner"></span>Looking up ${i + 1} of ${upcs.length}…`;
+        try {
+          const r = await API.get(`/api/products/by-upc/${encodeURIComponent(u)}`);
+          items.push({ upc: u, ve: r.variant_exists, pe: r.product_exists, prefill: r.prefill,
+                       image: r.image_url, wtitle: r.webami_title });
+        } catch (e) { items.push({ upc: u, error: e.message }); }
+      }
+      this._openReview(cat, items);
+    };
+    Modal.open({ title: `New ${cat.name}`, body, width: "560px", buttons: [
+      { label: "Look up", cls: "btn-primary", onClick: go },
+      { label: "Manual entry", onClick: () => this._openManual(cat, false) },
+      { label: "Back", onClick: () => this._openCondition(cat) },
+      { label: "Cancel", onClick: Modal.close },
+    ] });
+  }
+  
+  _openManual(cat, used) {
+    const o = this._opts;
+    let pe = null;
+    let extra = {};
+    const uniq = (v, opts) => [...new Set([v || "", ...opts])];
+    const f = (g, k, l, v = "") => `<div class="input-group"><label class="input-label">${l}</label>
+      <input class="input" data-g="${g}" data-k="${k}" value="${esc(v)}"></div>`;
+    const s = (g, k, l, opts, v = "") => `<div class="input-group"><label class="input-label">${l}</label>
+      <select class="input" data-g="${g}" data-k="${k}">${uniq(v, opts).map((x) => `<option ${x === v ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div>`;
     const body = document.createElement("div");
     body.innerHTML = `
-      <div class="input-group">
-        <label class="input-label">Create by UPC</label>
-        <div style="display:flex;gap:8px">
-          <input class="input" name="upc" placeholder="UPC (comma separate for multiple)">
-          <button type="button" class="btn btn-primary" id="n-look">Look up</button>
-        </div>
+      <div class="form-grid">
+        ${f("p", "title", "Title")}${f("p", "vendor", "Vendor / artist")}
+        ${s("p", "type", "Type", o.type, cat.name)}
+        ${s("p", "product_type", "Product type", o.product_type, cat.name)}
+        ${s("p", "category", "Category", o.category, cat.category)}
+        ${s("p", "status", "Status", ["ACTIVE", "DRAFT", "ARCHIVED"], "ACTIVE")}
+        ${f("p", "genres", "Genres (comma separated)")}
       </div>
-      <div id="n-res" style="margin-top:12px"></div>`;
-    const res = body.querySelector("#n-res");
-    const look = async () => {
-      const upc = body.querySelector("[name=upc]").value.trim();
-      if (!upc) return Toast.error("UPC required");
-      const upcs = [...new Set(upc.split(/[,\s]+/).filter(Boolean))];
-      if (upcs.length > 1) return this._runQueue(upcs);
-      res.innerHTML = '<span class="spinner"></span>Looking up…';
-      try {
-        const r = await API.get(`/api/products/by-upc/${encodeURIComponent(upc)}`);
-        const pf = r.prefill || { product: {}, variant: {} }, ve = r.variant_exists, pe = r.product_exists;
-        const msg = ve
-          ? `Variant already exists on "${ve.product_title}" (${ve.title || "—"})`
-          : pe ? `Product "${pe.title}" exists, this variant doesn't`
-          : "Not in Shopify";
-        res.innerHTML = `
-          <div>${esc(r.webami_title)}</div>
-          <div class="muted">${esc(pf.product.vendor || "")}</div>
-          <span class="badge ${ve || pe ? "badge-used" : "badge-new"}" style="margin-top:8px">${esc(msg)}</span>
-          <div class="modal-footer" style="margin-top:12px"></div>`;
-        const box = res.querySelector(".modal-footer");
-        const add = (label, cls, fn) => {
-          const b = document.createElement("button");
-          b.className = `btn ${cls}`;
-          b.textContent = label;
-          b.addEventListener("click", async () => {
-            try { await fn(); } catch (e) { Toast.error(e.message); }
-          });
-          box.appendChild(b);
-        };
-        const open = async (pid, vid, withProduct) => {
-          const p = await API.get(`/api/products/${encodeURIComponent(pid)}`);
-          this._openEdit(p, { ...pf, product: withProduct ? pf.product : {}, variantId: vid });
-        };
-        if (ve) add("Update existing variant", "btn-primary", () => open(ve.product_id, ve.variant_id, true));
-        else if (pe) {
-          add("Add variant to existing product", "btn-primary", () => open(pe.product_id, null, false));
-          add("Create separate product", "btn-ghost", () => this._openEdit(null, pf));
-        } else add("Create product", "btn-primary", () => this._openEdit(null, pf));
-      } catch (e) {
-        res.innerHTML = "";
-        Toast.error(e.message);
-      }
+      <div id="fz" style="margin:12px 0"></div>
+      <div class="form-grid">
+        ${f("v", "edition", "Edition", "Standard")}${f("v", "color", "Color")}${f("v", "attributes", "Attributes")}
+        ${f("v", "upc", "UPC")}${f("v", "cost", "Cost")}${f("v", "price", "Price")}
+        ${f("v", "inventory_quantity", "Qty", "0")}${f("v", "release_date", "Release date")}
+      </div>`;
+    const q = (g, k) => body.querySelector(`[data-g="${g}"][data-k="${k}"]`);
+    const fz = body.querySelector("#fz");
+    const drawFz = (items, wm = []) => {
+      const row = (btn, main, sub) => `<div style="display:flex;gap:8px;align-items:center;margin:4px 0">${btn}<span>${main}</span><span class="muted">${sub}</span></div>`;
+      fz.innerHTML = pe
+        ? `<span class="badge badge-used">Adding variant to existing: ${esc(pe.title)}</span>
+           <button class="btn btn-ghost btn-sm" data-clr>Clear</button>`
+        : (items.length ? `<div class="section-label" style="margin-top:0">In Shopify</div>` + items.map((p, i) =>
+            row(`<button class="btn btn-ghost btn-sm" data-use="${i}">Use</button>`,
+              `${esc(p.title)} — ${esc(p.vendor || "")}`,
+              `${esc(p.type || "")} · ${p.variants.map((v) => esc(v.title || "—")).join(" · ")}`)).join("") : "")
+          + (wm.length ? `<div class="section-label">In WebAMI (not matched to Shopify)</div>` + wm.map((w, i) =>
+            row(`<button class="btn btn-ghost btn-sm" data-wm="${i}">Use</button>`,
+              `${esc(w.title)} — ${esc(w.artist || "")}`,
+              `${esc(w.product_type || "")} · <span class="mono">${esc(w.upc)}</span>${w.used_by.length ? " · UPC already in Shopify" : ""}`)).join("") : "");
+      fz.querySelector("[data-clr]")?.addEventListener("click", () => { pe = null; look(); });
+      fz.querySelectorAll("[data-use]").forEach((b) => b.addEventListener("click", () => {
+        const p = items[+b.dataset.use];
+        pe = { product_id: p.product_id, title: p.title };
+        q("p", "title").value = p.title; q("p", "vendor").value = p.vendor || "";
+        q("p", "type").value = p.type || cat.name;
+        if (p.product_type) q("p", "product_type").value = p.product_type;
+        if (p.category_name) q("p", "category").value = p.category_name;
+        q("p", "genres").value = (p.genres || "").split(",").join(", ");
+        drawFz([]);
+      }));
+      fz.querySelectorAll("[data-wm]").forEach((b) => b.addEventListener("click", () => {
+        const w = wm[+b.dataset.wm], s = w.suggested;
+        q("p", "title").value = s.title;
+        q("p", "vendor").value = w.canon_artist || w.artist || "";
+        q("p", "genres").value = (w.genres || "").split(",").join(", ");
+        q("v", "edition").value = s.edition;
+        q("v", "color").value = s.color === "None" ? "" : s.color;
+        q("v", "attributes").value = s.attributes === "None" ? "" : s.attributes;
+        q("v", "upc").value = w.upc;
+        q("v", "release_date").value = w.release_date || "";
+        if (w.price != null) { q("v", "cost").value = w.price.toFixed(2); q("v", "price").value = (w.price / 0.66).toFixed(2); }
+        extra = {};
+        if (w.description) extra.description = w.description;
+        if (w.image_url) extra.image_url = w.image_url;
+        if (w.weight != null) extra.weight = toLb(w.weight, w.weight_unit);
+        drawFz([]);
+      }));
     };
-    body.querySelector("#n-look").addEventListener("click", look);
-    body.querySelector("[name=upc]").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") look();
+    const look = debounce(async () => {
+      if (used || pe) return;
+      try {
+        const p = new URLSearchParams({ title: q("p", "title").value, vendor: q("p", "vendor").value, type: cat.name, used });
+        const r = await API.get(`/api/products/fuzzy?${p}`);
+        drawFz(r.items, used ? [] : r.webami);
+      } catch (_) {}
+    }, 350);
+    q("p", "title").addEventListener("input", look);
+    q("p", "vendor").addEventListener("input", look);
+    q("v", "cost").addEventListener("input", (e) => {
+      const c = parseFloat(e.target.value);
+      if (c > 0) q("v", "price").value = (c / 0.66).toFixed(2);
     });
-    Modal.open({
-      title: "New product",
-      body,
-      width: "720px",
-      buttons: [
-        { label: "Manual entry", onClick: () => this._openEdit() },
-        { label: "Cancel", onClick: Modal.close },
-      ],
-    });
+    Modal.open({ title: `${used ? "Used" : "New"} ${cat.name} — manual`, body, width: "96vw", buttons: [
+      { label: "Add to review", cls: "btn-primary", onClick: () => {
+        const g = { p: {}, v: {} };
+        body.querySelectorAll("[data-k]").forEach((i) => { if (i.value.trim()) g[i.dataset.g][i.dataset.k] = i.value.trim(); });
+        if (!g.p.title || !g.p.vendor) return Toast.error("Title and vendor required");
+        g.p.tags = `${used ? "Used" : "New"}, ${cat.name}`;
+        this._openReview(cat, [{ upc: g.v.upc || "", pe, p: g.p, v: { ...extra, ...g.v }, wtitle: "" }]);
+      } },
+      { label: "Back", onClick: () => (used ? this._openCondition(cat) : this._openUpc(cat)) },
+      { label: "Cancel", onClick: Modal.close },
+    ] });
   }
-
-  async _runQueue(upcs) {
-    const u = upcs.shift();
-    if (!u) return Modal.close();
-    const next = () => this._runQueue(upcs);
-    try {
-      const r = await API.get(`/api/products/by-upc/${encodeURIComponent(u)}`);
-      const pf = r.prefill || { product: {}, variant: {} };
-      const ve = r.variant_exists, pe = r.product_exists;
-      if (ve || pe) {
-        const p = await API.get(`/api/products/${encodeURIComponent((ve || pe).product_id)}`);
-        this._openEdit(p, { ...pf, product: ve ? pf.product : {}, variantId: ve ? ve.variant_id : null }, next);
-      } else this._openEdit(null, pf, next);
-    } catch (e) {
-      Toast.error(`${u}: ${e.message}`);
-      next();
+  
+  _openReview(cat, items) {
+    const o = this._opts, D = 0.66;
+    items.forEach((it) => {
+      it.p ||= { ...(it.prefill?.product || {}) };
+      it.v ||= { ...(it.prefill?.variant || {}) };
+      it.v.inventory_quantity ??= "0";
+      it.acts = it.ve ? [["update", "Update existing variant"], ["skip", "Skip"]]
+        : it.pe ? [["variant", `Add variant to "${it.pe.title}"`], ["new", "Create separate product"], ["skip", "Skip"]]
+        : [["new", "Create product"], ["skip", "Skip"]];
+      it.act ||= it.error ? "skip" : it.acts[0][0];
+    });
+    const body = document.createElement("div");
+    const inp = (i, g, k, w) => `<input class="input" style="height:28px;width:${w}px" data-i="${i}" data-g="${g}" data-k="${k}" value="${esc(items[i][g][k] ?? "")}">`;
+    const dd = (i, g, k, opts) => { const v = items[i][g][k] || "";
+      return `<select class="input" style="height:28px" data-i="${i}" data-g="${g}" data-k="${k}">${[...new Set([v, ...opts])].map((x) => `<option ${x === v ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>`; };
+    const draw = () => {
+      body.innerHTML = `<div class="muted" id="rv-s" style="margin-bottom:8px"></div>
+        <div class="table-wrap modal-fit"><table class="variants-table">
+        <thead><tr><th>Item</th><th>Action</th><th>Title</th><th>Vendor</th><th>Type</th><th>Status</th>
+          <th>Edition</th><th>Color</th><th>Attributes</th><th>Cost</th><th>Price</th><th>Qty</th><th></th></tr></thead>
+        <tbody>${items.length ? items.map((it, i) => it.error
+          ? `<tr><td class="mono">${esc(it.upc)}</td><td colspan="11">${esc(it.error)}</td><td><button class="btn btn-ghost btn-sm" data-rm="${i}">Remove</button></td></tr>`
+          : `<tr class="${it.ve ? "rv-ex" : it.pe ? "rv-pe" : "rv-new"}">
+          <td><div style="display:flex;gap:8px;align-items:center">${thumb(it.image, it.wtitle)}
+            <div class="pair"><span>${esc(it.wtitle || "")}</span><span class="sub mono">${esc(it.upc)}</span>
+            <span class="badge ${it.ve || it.pe ? "badge-used" : "badge-new"}">${it.ve ? "In Shopify" : it.pe ? "Product in Shopify" : "New"}</span></div></div></td>
+          <td><select class="input" style="height:28px" data-act="${i}">${it.acts.map(([v, l]) => `<option value="${v}" ${v === it.act ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></td>
+          <td>${inp(i, "p", "title", 220)}</td><td>${inp(i, "p", "vendor", 150)}</td>
+          <td>${dd(i, "p", "type", o.type)}</td><td>${dd(i, "p", "status", ["ACTIVE", "DRAFT", "ARCHIVED"])}</td>
+          <td>${inp(i, "v", "edition", 130)}</td><td>${inp(i, "v", "color", 130)}</td><td>${inp(i, "v", "attributes", 130)}</td>
+          <td>${inp(i, "v", "cost", 70)}</td><td>${inp(i, "v", "price", 70)}</td><td>${inp(i, "v", "inventory_quantity", 60)}</td>
+          <td><button class="btn btn-ghost btn-sm" data-rm="${i}">Remove</button></td></tr>`).join("")
+          : '<tr><td colspan="13" class="empty-cell">Nothing to review</td></tr>'}</tbody></table></div>`;
+      sum();
+    };
+    const sum = () => {
+      const c = (a) => items.filter((x) => x.act === a).length;
+      body.querySelector("#rv-s").textContent = `${c("new")} new products · ${c("variant")} new variants · ${c("update")} updates · ${c("skip")} skipped`;
+    };
+    body.addEventListener("input", (e) => {
+      const d = e.target.dataset;
+      if (!d.k) return;
+      items[+d.i][d.g][d.k] = e.target.value;
+      if (d.k === "cost" && parseFloat(e.target.value) > 0) {
+        const p = (parseFloat(e.target.value) / D).toFixed(2);
+        items[+d.i].v.price = p;
+        body.querySelector(`[data-i="${d.i}"][data-k="price"]`).value = p;
+      }
+    });
+    body.addEventListener("change", (e) => {
+      const d = e.target.dataset;
+      if (d.k) items[+d.i][d.g][d.k] = e.target.value;
+      if (d.act != null) { items[+d.act].act = e.target.value; sum(); }
+    });
+    body.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-rm]");
+      if (b) { items.splice(+b.dataset.rm, 1); draw(); }
+    });
+    draw();
+    Modal.open({ title: "Review", body, width: "98vw", buttons: [
+      { label: "Create / save all", cls: "btn-primary", onClick: (btn) => this._createAll(items, btn) },
+      { label: "Back", onClick: () => this._openUpc(cat) },
+      { label: "Cancel", onClick: Modal.close },
+    ] });
+  }
+  
+  _variantPayload(v) {
+    const o = { title: variantTitle(v.edition, v.color, v.attributes) };
+    for (const k of ["upc", "description", "release_date", "price", "cost", "image_url"]) if (v[k]) o[k] = v[k];
+    if (v.inventory_quantity !== "" && v.inventory_quantity != null) o.inventory_quantity = parseInt(v.inventory_quantity, 10) || 0;
+    if (v.weight) o.weight = parseFloat(v.weight);
+    return o;
+  }
+  
+  _productPayload(p) {
+    const o = { status: "ACTIVE", ...p };
+    for (const k of ["tags", "genres"]) if (typeof o[k] === "string") o[k] = o[k].split(",").map((s) => s.trim()).filter(Boolean);
+    o.handle ||= makeHandle(o.vendor, o.title, o.type || o.product_type);
+    return o;
+  }
+  
+  async _createAll(items, btn) {
+    btn.disabled = true;
+    let ok = 0;
+    const errs = [];
+    for (const it of items) {
+      if (it.act === "skip" || it.error) continue;
+      btn.innerHTML = `<span class="spinner"></span>${ok + errs.length + 1}…`;
+      const v = this._variantPayload(it.v);
+      try {
+        let r;
+        if (it.act === "update") {
+          delete v.inventory_quantity;
+          r = await API.put(`/api/products/${encodeURIComponent(it.ve.product_id)}`, { product: {}, variants: [{ id: it.ve.variant_id, ...v }] });
+        } else if (it.act === "variant") {
+          r = await API.put(`/api/products/${encodeURIComponent(it.pe.product_id)}`, { product: {}, variants: [v] });
+        } else {
+          r = await API.post("/api/products", { product: this._productPayload(it.p), variants: [v] });
+        }
+        if (r.dry_run) { Modal.close(); return Toast.warning("Test mode: nothing written"); }
+        ok++;
+      } catch (e) { errs.push(`${it.upc || it.p.title}: ${e.message}`); }
     }
+    Modal.close();
+    errs.length ? Toast.warning(`Saved ${ok}; ${errs.length} failed: ${errs[0]}`) : Toast.success(`Saved ${ok}`);
+    this._load();
   }
 
   _buildHead(options) {

@@ -68,7 +68,7 @@ export class DashboardPage {
               </div>
             </div>
             <div class="sync-actions">
-              <button class="btn btn-primary" id="btn-${s.key}">Sync</button>
+              <button class="btn btn-primary" id="btn-${s.key}">${s.key !== 'prices' ? 'Sync Recent' : 'Pull Prices'}</button>
               ${s.key === 'webami' ? '<button class="btn btn-ghost" id="btn-webami-products">Fetch products</button>' : ''}
               ${s.key === 'webami' ? '<button class="btn btn-ghost" id="btn-webami-refetch">Re-fetch all</button>' : ''}
               ${s.full ? `<button class="btn btn-ghost" id="btn-full-${s.key}">Full sync</button>` : ''}

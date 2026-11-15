@@ -27,7 +27,8 @@ from app.db.webami_orders import (
 from app.db.webami_products import (
     get_unresolved_items, save_webami_product, get_webami_product_by_id, ignore_product,
     list_unmatched_variants, good_match, reset_webami_products,
-    drop_from_match_cache, suggest_local, decorate_candidates, shopify_candidates, search_shopify
+    drop_from_match_cache, suggest_local, decorate_candidates, shopify_candidates, search_shopify,
+    fuzzy_shopify, fuzzy_webami
 )
 from app.webami.webami_classify import kw_eval, suggest_parts, variant_kws, variant_title
 
@@ -75,6 +76,7 @@ __all__: list[str] = [
     "get_unresolved_items", "save_webami_product", "get_webami_product_by_id", "ignore_product",
     "list_unmatched_variants", "good_match", "reset_webami_products",
     "drop_from_match_cache", "suggest_local", "decorate_candidates", "shopify_candidates", "search_shopify",
+    "fuzzy_shopify", "fuzzy_webami",
     
     # Webami classify functions
     "kw_eval", "suggest_parts", "variant_kws", "variant_title",

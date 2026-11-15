@@ -115,6 +115,20 @@ def filter_options():
     return db.get_filter_options()
 
 
+@router.get("/new-options")
+def new_options():
+    pt = [r[0] for r in db.get_conn().execute(
+        "SELECT DISTINCT product_type FROM shopify_products "
+        "WHERE COALESCE(product_type,'')!='' ORDER BY 1 COLLATE NOCASE")]
+    return {"categories": config.PRODUCT_CATEGORIES, "product_type": pt, **db.get_filter_options()}
+
+
+@router.get("/fuzzy")
+def fuzzy(title: str = "", vendor: str = "", type: str = "", used: bool = False):
+    return {"items": db.fuzzy_shopify(title, vendor, type, used),
+            "webami": db.fuzzy_webami(title, vendor, type)}
+
+
 def _client(creds: dict) -> ShopifyClient:
     cfg = db.get_config()
     return ShopifyClient(creds["shopify_store"], creds["shopify_token"],
