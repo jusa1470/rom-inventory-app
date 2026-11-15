@@ -1,0 +1,28 @@
+For syncing DB:
+- Before push: sqlite3 inventory.db ".dump" > inventory.sql
+- After pull: sqlite3 inventory.db < inventory.sql
+
+
+ToDo:
+Variant name suggestion
+    - putting "180-Gram" and "Gatefold" in the color but it shouldn't be
+    - putting " - With Full Album Digital Download Card" in the edition but it shouldn't be
+    - it parsed out iex but put Coke Bottle back in the title when it should be a color "R is for Rocket (IEX) Coke Bottle"
+    - "Heavyweight Black Vinyl" -> should be "Heavyweight Vinyl"
+    - Malicia - Ltd Edition incl. 6 Tarot Cards [Import] -> not recognizing Ltd Edition as Limited Edition and 6 Tarot Cards should be in attributes
+    - got Clear Vinyl but not the other colors "clear color LPs in lime yellow, red, and blue"
+    - "Live in..." should be part of title not edition
+    - "(Various Artists)" as part of the title ended up as a color but it shouldn't be part of the title at all
+
+Missing page needs help
+    - get all fields that could be missing
+    - allow for multiple fixes at once or selected/shown get fixed
+    - if unsure, allow for a "needs review" status to be set and then reviewed later
+
+Artist aliases Find mismatches
+    - don't show ones that already exist in the db
+    - make the list block static size and add scrolling and expand/collapse
+
+Prices
+    - show a key for increasing/decreasing prices colors
+    - what does needs review mean?
