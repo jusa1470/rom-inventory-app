@@ -14,14 +14,11 @@ Variant name suggestion
     - "Live in..." should be part of title not edition
     - "(Various Artists)" as part of the title ended up as a color but it shouldn't be part of the title at all
 
+IN PROGRESS
 Missing page needs help
     - get all fields that could be missing
     - allow for multiple fixes at once or selected/shown get fixed
     - if unsure, allow for a "needs review" status to be set and then reviewed later
-
-Artist aliases Find mismatches
-    - don't show ones that already exist in the db
-    - make the list block static size and add scrolling and expand/collapse
 
 Prices
     - show a key for increasing/decreasing prices colors

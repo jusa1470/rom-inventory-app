@@ -386,6 +386,16 @@ class ShopifyClient:
                 raise RuntimeError(f"Image upload failed: {url}")
             time.sleep(1)
         raise RuntimeError(f"Image upload timed out: {url}")
+
+    def set_variant_image(self, product_id: str, variant_id: str, url: str) -> None:
+        mid = self.upload_image(product_id, url)
+        r = self.gql(M_VARIANT_MEDIA, {
+            "productId": f"gid://shopify/Product/{product_id}",
+            "variantMedia": [{"variantId": f"gid://shopify/ProductVariant/{variant_id}",
+                              "mediaIds": [mid]}]})
+        errs = (r.get("productVariantAppendMedia") or {}).get("userErrors")
+        if errs:
+            raise RuntimeError(f"variantMedia: {errs}")
     
     def create_variants(self, product_id: str, variants: list[dict], cfg: dict,
                         replace_default: bool = True) -> list[dict]:

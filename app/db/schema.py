@@ -182,6 +182,13 @@ MIGRATIONS: list[str] = [
         product_id TEXT,
         PRIMARY KEY (order_guid, upc)
     );
+    CREATE TABLE IF NOT EXISTS missing_queue (
+        kind TEXT NOT NULL, id TEXT NOT NULL, field TEXT NOT NULL, value TEXT,
+        PRIMARY KEY (kind, id, field)
+    );
+    CREATE TABLE IF NOT EXISTS missing_review (
+        kind TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY (kind, id)
+    );
 
     CREATE INDEX IF NOT EXISTS idx_products_title       ON shopify_products(title);
     CREATE INDEX IF NOT EXISTS idx_products_upc         ON shopify_products(upc);
