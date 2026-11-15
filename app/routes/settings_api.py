@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import db
+from app import config, db
 from app.auth import get_creds, require_session
 from app.shopify.oauth import DEFAULT_SCOPES, STORES
 
@@ -13,7 +13,6 @@ router = APIRouter(
 class SettingsIn(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    shopify_api_version: str = Field(pattern=r"^\d{4}-\d{2}$")
     shopify_type_ns: str = Field(min_length=1)
     shopify_type_key: str = Field(min_length=1)
     shopify_genres_ns: str = Field(min_length=1)
@@ -34,6 +33,7 @@ def _settings_response(cfg: dict, creds: dict) -> dict:
     return {
         **{field: cfg[field] for field in SettingsIn.model_fields},
         "dry_run": bool(cfg["dry_run"]),
+        "shopify_api_version": config.SHOPIFY_API_VERSION,
         # System-managed, read-only
         "shopify_location_id": cfg.get("shopify_location_id") or "",
         "last_shopify_sync": cfg.get("last_shopify_sync") or "",

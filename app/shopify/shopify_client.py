@@ -57,10 +57,10 @@ def _mfs(f: dict, entries: list, cfg: dict) -> list[dict]:
 
 
 class ShopifyClient:
-    def __init__(self, store: str, token: str, api_version: str):
+    def __init__(self, store: str, token: str):
         self.store: str = store.rstrip("/")
         self.token: str = token
-        self.version: str = api_version
+        self.version: str = config.SHOPIFY_API_VERSION
         self.url: str = f"https://{self.store}/admin/api/{self.version}/graphql.json"
         self._s = requests.Session()
         self._s.headers.update(

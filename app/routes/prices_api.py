@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from app import config, db
 from app.auth import get_creds, require_session
+from app.routes.sync_api import sync_after_push
 from app.shopify.shopify_client import ShopifyClient
 from app.webami import WebamiClient
 
@@ -103,4 +104,6 @@ def queue_push(creds: dict = Depends(get_creds)):
         db.update_local(pid, {}, vs)
         db.price_queue_remove([r["variant_id"] for r in items])
         pushed += len(items)
+    if pushed:
+        sync_after_push(creds)
     return {"ok": not errors, "pushed": pushed, "errors": errors}

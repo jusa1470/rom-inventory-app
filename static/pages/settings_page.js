@@ -35,7 +35,6 @@ const METAFIELD_GROUPS = [
 ];
 
 const TEXT_FIELDS = [
-  "shopify_api_version",
   ...METAFIELD_GROUPS.flatMap((g) => g.rows.flatMap((r) => [r.ns, r.key])),
 ];
 const STORE_LABELS = { main: "Main store", test: "Test store" };
@@ -91,13 +90,13 @@ export class SettingsPage {
             )
             .join("")}
           <div><div class="input-label">Location ID</div><div class="mono">${esc(s.shopify_location_id || "—")}</div></div>
+          <div><div class="input-label">API version</div><div class="mono">${esc(s.shopify_api_version)}</div></div>
           <div><div class="input-label">Last sync</div><div>${Fmt.datetime(s.last_shopify_sync)}</div></div>
         </div>
       </div>
 
       <form class="card" id="settings-form">
         <div class="form-grid">
-          ${this._input("shopify_api_version", "API version", s.shopify_api_version, 'placeholder="2025-01"')}
           ${this._input("page_size", "Page size", s.page_size, 'type="number" min="10" max="200"')}
         </div>
 
@@ -141,6 +140,8 @@ export class SettingsPage {
     body.appendChild(card);
     const draw = async () => {
       let items = [];
+      const wasExp = card.querySelector("#art-list")?.classList.contains("expanded");
+      const scroll = card.querySelector("#art-list")?.scrollTop || 0;
       try {
         ({ items } = await API.get("/api/artists"));
       } catch (e) {
@@ -149,13 +150,14 @@ export class SettingsPage {
       card.innerHTML = `
       <div class="section-label" style="margin-top:0">Normalized artists
       <button type="button" class="btn btn-ghost btn-sm" id="art-apply" style="margin-left:12px">Review existing</button>
-      <button type="button" class="btn btn-ghost btn-sm" id="art-mm">Find mismatches</button></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="art-mm">Find mismatches</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="art-exp" style="float:right">Expand</button></div>
       <div class="scope-add" style="margin:0 0 12px">
           <input class="input" name="alias" placeholder="Variant (e.g. Beatles)">
           <input class="input" name="canonical" placeholder="Use instead (e.g. The Beatles)">
           <button type="button" class="btn btn-primary" id="art-add">Add</button>
         </div>
-        <div class="table-wrap"><table><thead><tr><th>Variant</th><th>Normalized</th><th></th></tr></thead>
+        <div class="table-wrap list-box sm" id="art-list"><table><thead><tr><th>Variant</th><th>Normalized</th><th></th></tr></thead>
           <tbody>${
             items.length
               ? items
@@ -179,6 +181,16 @@ export class SettingsPage {
         }
       };
       card.querySelector("#art-add").addEventListener("click", add);
+      card.querySelector("#art-exp").addEventListener("click", (e) => {
+        const on = card.querySelector("#art-list").classList.toggle("expanded");
+        e.target.textContent = on ? "Collapse" : "Expand";
+      });
+      if (wasExp) {
+        const l = card.querySelector("#art-list");
+        l.classList.add("expanded");
+        l.scrollTop = scroll;
+        card.querySelector("#art-exp").textContent = "Collapse";
+      } else if (scroll) card.querySelector("#art-list").scrollTop = scroll;
       card
         .querySelector("[name=canonical]")
         .addEventListener("keydown", (e) => {
@@ -248,7 +260,7 @@ export class SettingsPage {
         const body = document.createElement('div');
         body.innerHTML = `
           <label class="check-row" style="margin:0 0 10px"><input type="checkbox" id="mm-show"><span>Show ignored</span></label>
-          <div class="table-wrap modal-fit"><table class="variants-table">
+          <div class="table-wrap list-box" id="mm-list"><table class="variants-table">
             <thead><tr><th>Example</th><th>Shopify</th><th>WebAMI</th><th></th></tr></thead>
             <tbody id="mm-body"></tbody></table></div>`;
         const tb = body.querySelector('#mm-body');

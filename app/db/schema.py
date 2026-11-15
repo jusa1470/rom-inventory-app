@@ -4,7 +4,7 @@ MIGRATIONS: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS app_config (
         id                       INTEGER PRIMARY KEY CHECK (id = 1),
-        shopify_api_version      TEXT    DEFAULT '2025-01',
+        shopify_api_version      TEXT,
         shopify_location_id      TEXT,
         shopify_upc_ns           TEXT    DEFAULT 'custom',
         shopify_upc_key          TEXT    DEFAULT 'upc',
@@ -61,7 +61,7 @@ MIGRATIONS: list[str] = [
         weight_unit         TEXT
     );
 
-    CREATE TABLE shopify_images (
+    CREATE TABLE IF NOT EXISTS shopify_images (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         product_id  TEXT NOT NULL REFERENCES shopify_products(product_id) ON DELETE CASCADE,
         media_id    TEXT NOT NULL,
@@ -79,7 +79,7 @@ MIGRATIONS: list[str] = [
         created_at TEXT DEFAULT (datetime('now'))
     );
     
-    CREATE TABLE webami_orders (
+    CREATE TABLE IF NOT EXISTS webami_orders (
         guid         TEXT PRIMARY KEY,
         number       TEXT NOT NULL,
         name         TEXT,
@@ -87,7 +87,7 @@ MIGRATIONS: list[str] = [
         sku_count    INTEGER DEFAULT 0,
         last_synced  TEXT DEFAULT (datetime('now'))
     );
-    CREATE TABLE webami_order_items (
+    CREATE TABLE IF NOT EXISTS webami_order_items (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         order_guid TEXT NOT NULL REFERENCES webami_orders(guid) ON DELETE CASCADE,
         position   INTEGER NOT NULL,
@@ -102,7 +102,7 @@ MIGRATIONS: list[str] = [
         price      REAL,
         UNIQUE(order_guid, position)
     );
-    CREATE TABLE webami_products (
+    CREATE TABLE IF NOT EXISTS webami_products (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         fingerprint  TEXT,
         title        TEXT,
@@ -126,7 +126,7 @@ MIGRATIONS: list[str] = [
         created_at   TEXT DEFAULT (datetime('now')),
         last_synced  TEXT DEFAULT (datetime('now'))
     );
-    CREATE TABLE webami_product_ids (
+    CREATE TABLE IF NOT EXISTS webami_product_ids (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         product_id INTEGER NOT NULL REFERENCES webami_products(id) ON DELETE CASCADE,
         kind       TEXT NOT NULL,
@@ -135,11 +135,11 @@ MIGRATIONS: list[str] = [
         last_seen  TEXT DEFAULT (datetime('now')),
         UNIQUE(kind, value)
     );
-    CREATE TABLE upc_ignored (
+    CREATE TABLE IF NOT EXISTS upc_ignored (
         product_id TEXT PRIMARY KEY,
         created_at TEXT DEFAULT (datetime('now'))
     );
-    CREATE TABLE price_checks (
+    CREATE TABLE IF NOT EXISTS price_checks (
         variant_id    TEXT PRIMARY KEY,
         upc           TEXT,
         wm_upc        TEXT,
@@ -150,21 +150,21 @@ MIGRATIONS: list[str] = [
         suggest_title TEXT,
         checked_at    TEXT DEFAULT (datetime('now'))
     );
-    CREATE TABLE price_queue (
+    CREATE TABLE IF NOT EXISTS price_queue (
         variant_id TEXT PRIMARY KEY,
         new_price  REAL NOT NULL
     );
-    CREATE TABLE artist_aliases (
+    CREATE TABLE IF NOT EXISTS artist_aliases (
         alias_norm TEXT PRIMARY KEY,
         alias      TEXT NOT NULL,
         canonical  TEXT NOT NULL
     );
-    CREATE TABLE mismatch_ignored (
+    CREATE TABLE IF NOT EXISTS mismatch_ignored (
         vendor_key TEXT NOT NULL,
         artist_key TEXT NOT NULL,
         PRIMARY KEY (vendor_key, artist_key)
     );
-    CREATE TABLE receipts (
+    CREATE TABLE IF NOT EXISTS receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_guid TEXT NOT NULL, 
         upc TEXT NOT NULL, 
@@ -173,7 +173,7 @@ MIGRATIONS: list[str] = [
         created_at TEXT DEFAULT (datetime('now')),
         reversed_at TEXT
     );
-    CREATE TABLE receipt_queue (
+    CREATE TABLE IF NOT EXISTS receipt_queue (
         order_guid TEXT NOT NULL,
         upc        TEXT NOT NULL,
         qty        INTEGER NOT NULL,
@@ -194,9 +194,9 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_webami_ids_product   ON webami_product_ids(product_id);
     CREATE INDEX IF NOT EXISTS idx_webami_items_prod    ON webami_order_items(product_id);
     CREATE INDEX IF NOT EXISTS idx_price_checks_status  ON price_checks(status);
-    CREATE INDEX idx_receipts_order ON receipts(order_guid, upc);
+    CREATE INDEX IF NOT EXISTS idx_receipts_order ON receipts(order_guid, upc);
     
-    CREATE VIEW shopify_upcs AS
+    CREATE VIEW IF NOT EXISTS shopify_upcs AS
         SELECT upc, product_id, NULL AS variant_id, 'product' AS source
           FROM shopify_products WHERE upc IS NOT NULL AND upc != ''
         UNION ALL

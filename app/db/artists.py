@@ -35,7 +35,7 @@ def remove_alias(alias: str) -> None:
 
 
 def key(s) -> str:
-    """Case/space-insensitive, keeps symbols (& vs +)."""
+    """Whitespace-normalized, case-sensitive; keeps symbols (& vs +)."""
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
@@ -66,7 +66,8 @@ def mismatches() -> list[dict]:
             "JOIN webami_products w ON w.upc=v.upc "
             "WHERE v.upc!='' AND COALESCE(w.artist,'')!='' AND COALESCE(p.vendor,'')!=''"):
         pair = (key(r["vendor"]), key(r["artist"]))
-        if pair in seen or key(canon(r["vendor"], amap)) == key(canon(r["artist"], amap)):
+        if (pair in seen or pair[0] in amap or pair[1] in amap
+                or key(canon(r["vendor"], amap)) == key(canon(r["artist"], amap))):
             continue
         seen.add(pair)
         out.append({"title": r["title"], "vendor": r["vendor"], "artist": r["artist"],

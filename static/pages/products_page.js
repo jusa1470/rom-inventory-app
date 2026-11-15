@@ -201,101 +201,135 @@ export class ProductsPage {
     ] });
   }
   
-  _openManual(cat, used) {
-    const o = this._opts;
-    let pe = null;
-    let extra = {};
-    const uniq = (v, opts) => [...new Set([v || "", ...opts])];
-    const f = (g, k, l, v = "") => `<div class="input-group"><label class="input-label">${l}</label>
-      <input class="input" data-g="${g}" data-k="${k}" value="${esc(v)}"></div>`;
-    const s = (g, k, l, opts, v = "") => `<div class="input-group"><label class="input-label">${l}</label>
-      <select class="input" data-g="${g}" data-k="${k}">${uniq(v, opts).map((x) => `<option ${x === v ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div>`;
-    const body = document.createElement("div");
-    body.innerHTML = `
+_openManual(cat, used) {
+  const o = this._opts, cats = o.categories;
+  let pe = null, extra = {}, hits = { items: [], webami: [] };
+  const opts = (arr, v) => [...new Set([v || "", ...arr])]
+    .map((x) => `<option ${x === v ? "selected" : ""}>${esc(x)}</option>`).join("");
+  const f = (g, k, l, v = "") => `<div class="input-group"><label class="input-label">${l}</label>
+    <input class="input" data-g="${g}" data-k="${k}" value="${esc(v)}"></div>`;
+  const s = (g, k, l, arr, v = "") => `<div class="input-group"><label class="input-label">${l}</label>
+    <select class="input" data-g="${g}" data-k="${k}">${opts(arr, v)}</select></div>`;
+  const body = document.createElement("div");
+  body.innerHTML = `
+    <div class="card nm-card">
+      <div class="section-label" style="margin-top:0">Product</div>
+      <div class="fz-anchor">
+        <div class="form-grid">${f("p", "title", "Title")}${f("p", "vendor", "Vendor / artist")}</div>
+        <div id="fz" class="fz-drop" hidden></div>
+      </div>
       <div class="form-grid">
-        ${f("p", "title", "Title")}${f("p", "vendor", "Vendor / artist")}
         ${s("p", "type", "Type", o.type, cat.name)}
-        ${s("p", "product_type", "Product type", o.product_type, cat.name)}
-        ${s("p", "category", "Category", o.category, cat.category)}
+        ${s("p", "product_type", "Product type", o.product_type, cat.product_type)}
+        ${s("p", "category", "Category", cats.map((c) => c.category), cat.category)}
         ${s("p", "status", "Status", ["ACTIVE", "DRAFT", "ARCHIVED"], "ACTIVE")}
         ${f("p", "genres", "Genres (comma separated)")}
       </div>
-      <div id="fz" style="margin:12px 0"></div>
-      <div class="form-grid">
-        ${f("v", "edition", "Edition", "Standard")}${f("v", "color", "Color")}${f("v", "attributes", "Attributes")}
-        ${f("v", "upc", "UPC")}${f("v", "cost", "Cost")}${f("v", "price", "Price")}
-        ${f("v", "inventory_quantity", "Qty", "0")}${f("v", "release_date", "Release date")}
-      </div>`;
-    const q = (g, k) => body.querySelector(`[data-g="${g}"][data-k="${k}"]`);
-    const fz = body.querySelector("#fz");
-    const drawFz = (items, wm = []) => {
-      const row = (btn, main, sub) => `<div style="display:flex;gap:8px;align-items:center;margin:4px 0">${btn}<span>${main}</span><span class="muted">${sub}</span></div>`;
-      fz.innerHTML = pe
-        ? `<span class="badge badge-used">Adding variant to existing: ${esc(pe.title)}</span>
-           <button class="btn btn-ghost btn-sm" data-clr>Clear</button>`
-        : (items.length ? `<div class="section-label" style="margin-top:0">In Shopify</div>` + items.map((p, i) =>
-            row(`<button class="btn btn-ghost btn-sm" data-use="${i}">Use</button>`,
-              `${esc(p.title)} — ${esc(p.vendor || "")}`,
-              `${esc(p.type || "")} · ${p.variants.map((v) => esc(v.title || "—")).join(" · ")}`)).join("") : "")
-          + (wm.length ? `<div class="section-label">In WebAMI (not matched to Shopify)</div>` + wm.map((w, i) =>
-            row(`<button class="btn btn-ghost btn-sm" data-wm="${i}">Use</button>`,
-              `${esc(w.title)} — ${esc(w.artist || "")}`,
-              `${esc(w.product_type || "")} · <span class="mono">${esc(w.upc)}</span>${w.used_by.length ? " · UPC already in Shopify" : ""}`)).join("") : "");
-      fz.querySelector("[data-clr]")?.addEventListener("click", () => { pe = null; look(); });
-      fz.querySelectorAll("[data-use]").forEach((b) => b.addEventListener("click", () => {
-        const p = items[+b.dataset.use];
-        pe = { product_id: p.product_id, title: p.title };
-        q("p", "title").value = p.title; q("p", "vendor").value = p.vendor || "";
-        q("p", "type").value = p.type || cat.name;
-        if (p.product_type) q("p", "product_type").value = p.product_type;
-        if (p.category_name) q("p", "category").value = p.category_name;
-        q("p", "genres").value = (p.genres || "").split(",").join(", ");
-        drawFz([]);
-      }));
-      fz.querySelectorAll("[data-wm]").forEach((b) => b.addEventListener("click", () => {
-        const w = wm[+b.dataset.wm], s = w.suggested;
-        q("p", "title").value = s.title;
-        q("p", "vendor").value = w.canon_artist || w.artist || "";
-        q("p", "genres").value = (w.genres || "").split(",").join(", ");
-        q("v", "edition").value = s.edition;
-        q("v", "color").value = s.color === "None" ? "" : s.color;
-        q("v", "attributes").value = s.attributes === "None" ? "" : s.attributes;
-        q("v", "upc").value = w.upc;
-        q("v", "release_date").value = w.release_date || "";
-        if (w.price != null) { q("v", "cost").value = w.price.toFixed(2); q("v", "price").value = (w.price / 0.66).toFixed(2); }
-        extra = {};
-        if (w.description) extra.description = w.description;
-        if (w.image_url) extra.image_url = w.image_url;
-        if (w.weight != null) extra.weight = toLb(w.weight, w.weight_unit);
-        drawFz([]);
-      }));
-    };
-    const look = debounce(async () => {
-      if (used || pe) return;
-      try {
-        const p = new URLSearchParams({ title: q("p", "title").value, vendor: q("p", "vendor").value, type: cat.name, used });
-        const r = await API.get(`/api/products/fuzzy?${p}`);
-        drawFz(r.items, used ? [] : r.webami);
-      } catch (_) {}
-    }, 350);
-    q("p", "title").addEventListener("input", look);
-    q("p", "vendor").addEventListener("input", look);
-    q("v", "cost").addEventListener("input", (e) => {
-      const c = parseFloat(e.target.value);
-      if (c > 0) q("v", "price").value = (c / 0.66).toFixed(2);
-    });
-    Modal.open({ title: `${used ? "Used" : "New"} ${cat.name} — manual`, body, width: "96vw", buttons: [
-      { label: "Add to review", cls: "btn-primary", onClick: () => {
-        const g = { p: {}, v: {} };
-        body.querySelectorAll("[data-k]").forEach((i) => { if (i.value.trim()) g[i.dataset.g][i.dataset.k] = i.value.trim(); });
-        if (!g.p.title || !g.p.vendor) return Toast.error("Title and vendor required");
-        g.p.tags = `${used ? "Used" : "New"}, ${cat.name}`;
-        this._openReview(cat, [{ upc: g.v.upc || "", pe, p: g.p, v: { ...extra, ...g.v }, wtitle: "" }]);
-      } },
-      { label: "Back", onClick: () => (used ? this._openCondition(cat) : this._openUpc(cat)) },
-      { label: "Cancel", onClick: Modal.close },
-    ] });
-  }
+      <div id="ev"></div>
+    </div>
+    <div class="card nm-card">
+      <div class="section-label" style="margin-top:0">Variant</div>
+      <div class="form-grid">${f("v", "edition", "Edition", "Standard")}${f("v", "color", "Color")}${f("v", "attributes", "Attributes")}</div>
+      <div class="section-label">Identifiers</div>
+      <div class="form-grid">${f("v", "upc", "UPC")}${f("v", "release_date", "Release date")}</div>
+      <div class="section-label">Pricing &amp; stock</div>
+      <div class="form-grid">${f("v", "cost", "Cost")}${f("v", "price", "Price")}${f("v", "inventory_quantity", "Qty", "0")}</div>
+    </div>`;
+  const q = (g, k) => body.querySelector(`[data-g="${g}"][data-k="${k}"]`);
+  const fz = body.querySelector("#fz"), ev = body.querySelector("#ev");
+  const hide = () => { fz.hidden = true; };
+  const KEEP = "#fz, [data-k=title], [data-k=vendor]";
+
+  const setPe = (p) => {
+    pe = p && { product_id: p.product_id, title: p.title };
+    body.querySelectorAll('[data-g="p"]').forEach((i) => { i.disabled = !!pe; });
+    ev.innerHTML = p ? `
+      <div class="section-label"><span class="badge badge-used">Adding variant to existing product</span>
+        Existing variants (${p.variants.length})</div>
+      <div class="ev-list">${p.variants.map((v) => `<div class="ev-item"><span>${esc(v.title || "—")}</span>
+        <span class="mono muted">${esc(v.upc || "no UPC")}</span><span class="muted">qty ${v.inventory_quantity ?? 0}</span></div>`).join("")
+        || '<div class="muted">No variants</div>'}</div>
+      <button class="btn btn-ghost btn-sm" data-clr style="margin-top:10px">Choose a different product</button>` : "";
+    ev.querySelector("[data-clr]")?.addEventListener("click", () => setPe(null));
+  };
+
+  const useShopify = (p) => {
+    q("p", "title").value = p.title;
+    q("p", "vendor").value = p.vendor || "";
+    q("p", "type").value = p.type || cat.name;
+    if (p.product_type) q("p", "product_type").value = p.product_type;
+    const c = cats.find((c) => c.category.split(" > ").pop() === p.category_name);
+    if (c) q("p", "category").value = c.category;
+    q("p", "genres").value = (p.genres || "").split(",").join(", ");
+    setPe(p);
+    hide();
+  };
+
+  const useWm = (w) => {
+    extra = {};
+    ["edition", "color", "attributes", "upc", "release_date", "cost", "price"]
+      .forEach((k) => { q("v", k).value = k === "edition" ? "Standard" : ""; });
+    for (const [g, d] of [["p", w.prefill.product], ["v", w.prefill.variant]])
+      for (const [k, val] of Object.entries(d)) {
+        const i = q(g, k);
+        if (i) i.value = val; else if (g === "v") extra[k] = val;
+      }
+    hide();
+  };
+
+  const drawFz = () => {
+    const row = (badge, cls, attr, i, main, sub) => `<div class="fz-item" data-${attr}="${i}">
+      <span class="badge ${cls}">${badge}</span><div class="pair"><span>${main}</span><span class="sub">${sub}</span></div></div>`;
+    fz.innerHTML = hits.items.map((p, i) => row("In Shopify", "badge-active", "sh", i,
+        `${esc(p.title)} — ${esc(p.vendor || "")}`,
+        `${esc(p.type || "")} · ${p.variants.map((v) => esc(v.title || "—")).join(" · ") || "no variants"}`)).join("")
+      + hits.webami.map((w, i) => row("WebAMI", "badge-new", "wm", i,
+        `${esc(w.title)} — ${esc(w.artist || "")}`,
+        `${esc(w.product_type || "")} · <span class="mono">${esc(w.upc)}</span>${w.used_by.length ? " · UPC already in Shopify" : ""}`)).join("");
+    fz.hidden = !fz.innerHTML;
+  };
+
+  fz.addEventListener("click", (e) => {
+    const t = e.target.closest(".fz-item");
+    if (!t) return;
+    t.dataset.sh != null ? useShopify(hits.items[+t.dataset.sh]) : useWm(hits.webami[+t.dataset.wm]);
+  });
+  body.addEventListener("mousedown", (e) => { if (!e.target.closest(KEEP)) hide(); });
+  body.addEventListener("focusin", (e) => { if (!e.target.closest(KEEP)) hide(); });
+
+  const look = debounce(async () => {
+    if (pe) return;
+    try {
+      const p = new URLSearchParams({ title: q("p", "title").value, vendor: q("p", "vendor").value, type: cat.name, used });
+      hits = await API.get(`/api/products/fuzzy?${p}`);
+      drawFz();
+    } catch (_) {}
+  }, 350);
+  ["title", "vendor"].forEach((k) => {
+    q("p", k).addEventListener("input", look);
+    q("p", k).addEventListener("focus", () => { if (!pe && fz.innerHTML) fz.hidden = false; });
+  });
+  q("p", "type").addEventListener("change", (e) => {
+    const c = cats.find((c) => c.name === e.target.value);
+    if (c) { q("p", "product_type").value = c.product_type; q("p", "category").value = c.category; }
+  });
+  q("v", "cost").addEventListener("input", (e) => {
+    const c = parseFloat(e.target.value);
+    if (c > 0) q("v", "price").value = (c / 0.66).toFixed(2);
+  });
+
+  Modal.open({ title: `${used ? "Used" : "New"} ${cat.name} — manual`, body, width: "96vw", buttons: [
+    { label: "Add to review", cls: "btn-primary", onClick: () => {
+      const g = { p: {}, v: {} };
+      body.querySelectorAll("[data-k]").forEach((i) => { if (i.value.trim()) g[i.dataset.g][i.dataset.k] = i.value.trim(); });
+      if (!g.p.title || !g.p.vendor) return Toast.error("Title and vendor required");
+      g.p.tags = `${used ? "Used" : "New"}, ${cat.name}`;
+      this._openReview(cat, [{ upc: g.v.upc || "", pe, p: g.p, v: { ...extra, ...g.v }, wtitle: "" }]);
+    } },
+    { label: "Back", onClick: () => (used ? this._openCondition(cat) : this._openUpc(cat)) },
+    { label: "Cancel", onClick: Modal.close },
+  ] });
+}
   
   _openReview(cat, items) {
     const o = this._opts, D = 0.66;

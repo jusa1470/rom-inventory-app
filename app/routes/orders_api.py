@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from app import config, db
 from app.auth import get_creds, require_session
+from app.routes.sync_api import sync_after_push
 from app.shopify.shopify_client import ShopifyClient
 from app.webami.webami_helper import SHOPIFY_TYPE, to_lbs
 
@@ -44,8 +45,7 @@ class Target(BaseModel):
 
 def _client(creds: dict):
     cfg = db.get_config()
-    return ShopifyClient(creds["shopify_store"], creds["shopify_token"],
-                         cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION), cfg
+    return ShopifyClient(creds["shopify_store"], creds["shopify_token"]), cfg
 
 
 def _wp(guid: str, upc: str):
@@ -62,10 +62,12 @@ def _left(guid: str, upc: str) -> int:
 
 def _build(wp: dict, upc: str, qty: int = 0):
     s = db.suggest_parts(wp)
-    fmt = SHOPIFY_TYPE.get((wp.get("product_type") or "").lower(), wp.get("product_type"))
+    fmt = config.type_for_format(wp.get("product_type")) or wp.get("product_type")
+    cat = config.category(fmt) or {}
     genres = [g.strip() for g in (wp.get("genres") or "").split(",") if g.strip()]
     p = {"title": s["title"], "vendor": db.canon(wp.get("artist") or wp.get("vendor")),
-         "status": "ACTIVE", "type": fmt, "genres": genres}
+         "status": "ACTIVE", "type": fmt, "genres": genres,
+         "category_id": cat.get("category_id"), "product_type": cat.get("product_type"),}
     v = {"title": db.variant_title(s), "upc": upc, "inventory_quantity": qty,
          "description": wp.get("description") or "",
          "release_date": wp.get("release_date") or ""}
@@ -270,6 +272,8 @@ def queue_push(body: Push = Push(), creds: dict = Depends(get_creds)):
         updated += res in ("update", "map")
         variants += res == "variant"
         created += res == "new"
+    if updated or variants or created:
+        sync_after_push(creds)
     return {"ok": not errors, "updated": updated, "variants": variants,
             "created": created, "errors": errors}
 
@@ -292,6 +296,8 @@ def undo_receipt(rid: int, creds: dict = Depends(get_creds)):
             raise HTTPException(502, str(e))
         db.update_local(v["product_id"], {}, vs)
     db.reverse_receipt(rid)
+    if v:
+        sync_after_push(creds)
     return {"ok": True}
 
 

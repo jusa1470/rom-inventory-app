@@ -78,3 +78,11 @@ def start_webami_resolve(refetch: bool = False, creds: dict = Depends(get_creds)
 def start_price_check(creds: dict = Depends(get_creds)):
     return _launch(creds, _WM, "Price Check", jobs.run_price_check,
                config.WEBAMI_BASE_URL, creds["webami_username"], creds["webami_password"])
+
+
+def sync_after_push(creds: dict) -> None:
+    try:
+        _launch(creds, ("shopify_store", "shopify_token"), "Shopify Sync",
+                jobs.run_shopify_sync, creds["shopify_store"], creds["shopify_token"], False)
+    except HTTPException:
+        pass  # already running / no creds

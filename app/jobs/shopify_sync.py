@@ -22,9 +22,7 @@ def run_shopify_sync(job_id: str, store: str, token: str, full: bool = False) ->
 
 def _sync(job_id: str, store: str, token: str, full: bool) -> dict:
     cfg = db.get_config() or {}
-    client = ShopifyClient(
-        store, token, cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION
-    )
+    client = ShopifyClient(store, token)
     # Recorded before the pull so products edited mid-sync are picked up next time.
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     started_db = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

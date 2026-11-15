@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app import config, db
 from app.auth import get_creds, require_session
 from app.db.connection import strip_gid
+from app.routes.sync_api import sync_after_push
 from app.shopify.shopify_client import ShopifyClient
 from app.webami.webami_client import WebamiClient
 from app.webami.webami_helper import SHOPIFY_TYPE, WEBAMI_FMT, to_lbs
@@ -59,18 +60,46 @@ def _inch(fmt: str | None) -> str | None:
 
 
 def _defaults(typ: str) -> dict:
-    if not typ:
+    c = config.category(typ) if typ else None
+    if not c:
         return {}
-    c = db.get_conn()
+    return {"type": c["name"], "product_type": c["product_type"],
+            "category": c["category"], "tags": f"New, {c['name']}"}
 
-    def top(col):
-        r = c.execute(
-            f"SELECT {col} FROM shopify_products WHERE type=? AND {col} IS NOT NULL "
-            f"AND {col}!='' GROUP BY {col} ORDER BY COUNT(*) DESC LIMIT 1", (typ,)).fetchone()
-        return r[0] if r else None
-    d = {"type": typ, "product_type": top("product_type") or typ,
-         "category": top("category_name"), "tags": f"New, {typ}"}
-    return {k: v for k, v in d.items() if v}
+
+def _cat(client, name: str):
+    c = config.category(name)
+    if c:
+        return c["category_id"], c["category"].split(" > ")[-1]
+    c = client.find_category(name)
+    return strip_gid(c["id"]), c["name"]
+
+
+def _prefill(w: dict, upc: str) -> dict:
+    s = db.suggest_parts(w)
+    vendor = db.canon(w.get("artist") or w.get("vendor"))
+    inch = _inch(w.get("product_type"))
+    typ = "Vinyl" if inch else config.type_for_format(w.get("product_type")) or ""
+    cost = w.get("price")
+    var = {
+        "edition": s["edition"], "color": s["color"], "attributes": s["attributes"],
+        "upc": upc, "description": w.get("description"),
+        "release_date": w.get("release_date"),
+        "cost": f"{cost:.2f}" if cost is not None else None,
+        "price": f"{db.sell_price(cost):.2f}" if cost is not None else None,
+        "weight": to_lbs(w.get("weight"), w.get("weight_unit")),
+        "image_url": w.get("image_url"),
+    }
+    var = {k: str(v) for k, v in var.items() if v not in (None, "", "None")}
+    prod = {"title": s["title"], "vendor": vendor, **_defaults(typ),
+            "genres": ", ".join(g for g in (w.get("genres") or "").split(",") if g)}
+    prod = {k: v for k, v in prod.items() if v}
+    ve = db.find_variant_by_upc(upc)
+    pe = ({"product_id": ve["product_id"], "title": ve["product_title"]} if ve
+          else db.find_product(prod["title"], vendor, prod.get("type", typ)))
+    return {"image_url": w.get("image_url"), "webami_title": w["title"],
+            "prefill": {"product": prod, "variant": var},
+            "variant_exists": ve, "product_exists": pe}
 
 
 @router.get("")
@@ -117,22 +146,36 @@ def filter_options():
 
 @router.get("/new-options")
 def new_options():
-    pt = [r[0] for r in db.get_conn().execute(
-        "SELECT DISTINCT product_type FROM shopify_products "
-        "WHERE COALESCE(product_type,'')!='' ORDER BY 1 COLLATE NOCASE")]
-    return {"categories": config.PRODUCT_CATEGORIES, "product_type": pt, **db.get_filter_options()}
+    cats = config.PRODUCT_CATEGORIES
+    return {**db.get_filter_options(), "categories": cats,
+            "type": [c["name"] for c in cats],
+            "product_type": list(dict.fromkeys(c["product_type"] for c in cats))}
 
 
 @router.get("/fuzzy")
 def fuzzy(title: str = "", vendor: str = "", type: str = "", used: bool = False):
-    return {"items": db.fuzzy_shopify(title, vendor, type, used),
-            "webami": db.fuzzy_webami(title, vendor, type)}
+    wm = [] if used else db.fuzzy_webami(title, vendor, type)
+    for w in wm:
+        w["prefill"] = _prefill(w, w["upc"])["prefill"]
+    return {"items": db.fuzzy_shopify(title, vendor, type, used), "webami": wm}
+
+
+@router.get("/by-upc/{upc}")
+def by_upc(upc: str, creds: dict = Depends(get_creds)):
+    upc = upc.strip()
+    try:
+        client = WebamiClient(config.WEBAMI_BASE_URL,
+                              creds.get("webami_username"), creds.get("webami_password"))
+        w = client.fetch_product(f"/{upc}")
+    except Exception as e:
+        raise HTTPException(502, str(e))
+    if not w.get("title"):
+        raise HTTPException(404, "UPC not found in WebAMI")
+    return _prefill(w, upc)
 
 
 def _client(creds: dict) -> ShopifyClient:
-    cfg = db.get_config()
-    return ShopifyClient(creds["shopify_store"], creds["shopify_token"],
-                         cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION)
+    return ShopifyClient(creds["shopify_store"], creds["shopify_token"])
 
 
 @router.get("/channels")
@@ -167,6 +210,8 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
     try:
         cat = p.pop("category", "")
         if cat:
+            p["category_id"], p["category_name"] = _cat(client, cat)
+        if cat:
             c = client.find_category(cat)
             p["category_id"] = strip_gid(c["id"])
             p["category_name"] = c["name"]
@@ -182,6 +227,7 @@ def create_product(body: ProductUpdate, creds: dict = Depends(get_creds)):
     db.add_local_product(pid, p)
     if vs:
         db.add_local_variants(pid, vs, created)
+    sync_after_push(creds)
     return {"ok": True, "product_id": pid}
 
 
@@ -195,6 +241,7 @@ def delete_product(product_id: str, creds: dict = Depends(get_creds)):
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.delete_local_product(product_id)
+    sync_after_push(creds)
     return {"ok": True}
 
 
@@ -208,45 +255,8 @@ def delete_variant(product_id: str, variant_id: str, creds: dict = Depends(get_c
     except RuntimeError as e:
         raise HTTPException(502, str(e))
     db.delete_local_variant(variant_id)
+    sync_after_push(creds)
     return {"ok": True}
-
-
-@router.get("/by-upc/{upc}")
-def by_upc(upc: str, creds: dict = Depends(get_creds)):
-    upc = upc.strip()
-    try:
-        client = WebamiClient(config.WEBAMI_BASE_URL,
-                              creds.get("webami_username"), creds.get("webami_password"))
-        w = client.fetch_product(f"/{upc}")
-    except Exception as e:
-        raise HTTPException(502, str(e))
-    if not w.get("title"):
-        raise HTTPException(404, "UPC not found in WebAMI")
-    s = db.suggest_parts(w)
-    vendor = db.canon(w.get("artist") or w.get("vendor"))
-    inch = _inch(w.get("product_type"))
-    typ = "Vinyl" if inch else SHOPIFY_TYPE.get((w.get("product_type") or "").strip().lower(), "")
-    cost = w.get("price")
-    color = s["color"]
-    var = {
-        "edition": s["edition"], "color": color, "attributes": s["attributes"],
-        "upc": upc, "description": w.get("description"),
-        "release_date": w.get("release_date"),
-        "cost": f"{cost:.2f}" if cost is not None else None,
-        "price": f"{db.sell_price(cost):.2f}" if cost is not None else None,
-        "weight": to_lbs(w.get("weight"), w.get("weight_unit")),
-        "image_url": w.get("image_url"),
-    }
-    var = {k: str(v) for k, v in var.items() if v not in (None, "", "None")}
-    prod = {"title": s["title"], "vendor": vendor, **_defaults(typ),
-            "genres": ", ".join(g for g in (w.get("genres") or "").split(",") if g)}
-    prod = {k: v for k, v in prod.items() if v}
-    ve = db.find_variant_by_upc(upc)
-    pe = ({"product_id": ve["product_id"], "title": ve["product_title"]} if ve
-        else db.find_product(prod["title"], vendor, prod.get("type", typ)))
-    return {"image_url": w.get("image_url"), "webami_title": w["title"],
-            "prefill": {"product": prod, "variant": var},
-            "variant_exists": ve, "product_exists": pe}
 
 
 @router.get("/{product_id}/webami-suggestions")
@@ -313,7 +323,7 @@ def webami_suggestions(product_id: str, search: bool = False, variant_id: str | 
     p["siblings"] = [x for x in p["variants"] if x["variant_id"] != variant_id]
     for c in cands:
         c["suggested"] = db.suggest_parts(c)
-        c["defaults"] = _defaults(SHOPIFY_TYPE.get((c.get("product_type") or "").strip().lower(), ""))
+        c["defaults"] = _defaults(config.type_for_format(c.get("product_type")) or "")
     return {"items": cands[:15]}
 
 
@@ -342,9 +352,7 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
     cfg = db.get_config()
     try:
         if "category" in p:
-            cat = client.find_category(p.pop("category"))
-            p["category_id"] = strip_gid(cat["id"])
-            p["category_name"] = cat["name"]
+            p["category_id"], p["category_name"] = _cat(client, p.pop("category"))
         if p:
             client.update_product(product_id, p, cfg)
         if vs:
@@ -371,4 +379,5 @@ def update_product_fields(product_id: str, body: ProductUpdate, creds: dict = De
     for v in vs:
         if v.get("upc"):
             db.drop_from_match_cache(v["id"])
+    sync_after_push(creds)
     return {"ok": True}

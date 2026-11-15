@@ -1,5 +1,5 @@
 For syncing DB:
-- Before push: sqlite3 inventory.db ".dump" > inventory.sql
+- Before push: sqlite3 inventory.db ".dump" | iconv -f UTF-8 -t UTF-8 > inventory.sql
 - After pull: sqlite3 inventory.db < inventory.sql
 
 

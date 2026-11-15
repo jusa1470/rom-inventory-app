@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from app import config, db
 from app.auth import get_creds, require_session
+from app.routes.sync_api import sync_after_push
 from app.shopify.shopify_client import ShopifyClient
 
 router = APIRouter(prefix="/api/artists", tags=["artists"],
@@ -48,8 +49,7 @@ def apply(body: Ids, creds: dict = Depends(get_creds)):
     if db.is_dry_run():
         return {"ok": True, "dry_run": True, "updated": 0, "errors": []}
     cfg = db.get_config()
-    client = ShopifyClient(creds["shopify_store"], creds["shopify_token"],
-                           cfg.get("shopify_api_version") or config.DEFAULT_API_VERSION)
+    client = ShopifyClient(creds["shopify_store"], creds["shopify_token"])
     updated, errors = 0, []
     for c in db.vendor_changes():
         if c["product_id"] not in body.product_ids:
@@ -61,6 +61,8 @@ def apply(body: Ids, creds: dict = Depends(get_creds)):
             continue
         db.update_local(c["product_id"], {"vendor": c["new_vendor"]}, [])
         updated += 1
+    if updated:
+        sync_after_push(creds)
     return {"ok": not errors, "updated": updated, "errors": errors}
 
 
