@@ -52,10 +52,24 @@ def _sug(kind, w):
     return {k: str(v) for k, v in d.items() if v not in (None, "", 0)}
 
 
+def _mm_sql():
+    q = lambda s: "'" + str(s).replace("'", "''") + "'"
+    vals = ",".join(f"({q(c['name'])},{q(c['product_type'])},{q(c['category'].split(' > ')[-1])})"
+                    for c in config.PRODUCT_CATEGORIES)
+    e = lambda c: f"COALESCE({c},'')"
+    return (f"(({e('p.type')}!='' OR {e('p.product_type')}!='' OR {e('p.category_name')}!='') "
+            f"AND NOT EXISTS (SELECT 1 FROM (SELECT column1 t, column2 pt, column3 c FROM (VALUES {vals})) m "
+            f"WHERE ({e('p.type')}='' OR p.type=m.t) AND ({e('p.product_type')}='' OR p.product_type=m.pt) "
+            f"AND ({e('p.category_name')}='' OR p.category_name=m.c)))")
+
+
 def list_missing(kind: str, fields: list[str], q: str = "", page: int = 1,
                  per_page: int = 50, review: bool = False) -> dict:
     conn = get_conn()
     flags = FIELDS[kind]
+    media = "COALESCE(p.type, p.product_type) IN ('Vinyl','CD','Cassette')"
+    flags = {**flags, "genres": f"({media} AND {flags['genres']})",
+             "mismatch": _mm_sql()} if kind == "products" else flags
     use = [f for f in fields if f in flags] or [f for f in flags if f not in OPTIONAL]
     sel = ", ".join(f"({flags[f]}) AS f_{f}" for f in flags)
     where = "(" + " OR ".join(flags[f] for f in use) + ")"
@@ -71,6 +85,7 @@ def list_missing(kind: str, fields: list[str], q: str = "", page: int = 1,
         frm = "FROM shopify_products p"
         cols = ("p.product_id AS id, p.product_id, p.title, p.vendor, NULL AS variant_id, "
                 "NULL AS variant_title, p.type AS ptype, p.product_type AS pptype, "
+                "p.category_name AS pcat, "
                 "(SELECT x.upc FROM shopify_variants x WHERE x.product_id=p.product_id "
                 "AND COALESCE(x.upc,'')!='' LIMIT 1) AS u")
         order = "p.title COLLATE NOCASE"
@@ -90,7 +105,28 @@ def list_missing(kind: str, fields: list[str], q: str = "", page: int = 1,
     idx = None
     for r in items:
         r["missing"] = [f for f in flags if r.pop(f"f_{f}")]
-        ptype, pptype, u = r.pop("ptype"), r.pop("pptype"), r.pop("u")
+        r["_all"] = r["missing"][:]
+        ptype, pptype, u, pcat = r.pop("ptype"), r.pop("pptype"), r.pop("u"), r.pop("pcat", None)
+        r["current"] = {"type": ptype, "product_type": pptype,
+                        "category": (pcat or "")} if kind == "products" else {}
+        c = None
+        if kind == "products":
+            c = next((x for n in (ptype, pptype, pcat) if n and (x := config.category(n))), None)
+            if "mismatch" in r["missing"]:
+                r["missing"].remove("mismatch")
+                cur = {"type": ptype, "product_type": pptype, "category": pcat}
+                exp = {"type": c["name"], "product_type": c["product_type"],
+                       "category": c["category"].split(" > ")[-1]} if c else {}
+                bad = [k for k, v in cur.items() if v and v != exp.get(k)] or [k for k, v in cur.items() if v]
+                r["missing"] += [k for k in bad if k not in r["missing"]]
+                r["_bad"] = bad
+        if fields:
+            keep = set(fields)
+            if "mismatch" in keep:
+                keep |= {"type", "product_type", "category"} & set(r.get("_bad", []))
+            r["missing"] = [f for f in r["missing"] if f in keep]
+        r.pop("_bad", None)
+        r.pop("_all", None)
         w = _wm(conn, u) if u else None
         if w is None and kind == "variants":
             from app.db.webami_products import _index, suggest_local
@@ -98,8 +134,11 @@ def list_missing(kind: str, fields: list[str], q: str = "", page: int = 1,
             c = suggest_local({"title": r["title"], "vendor": r["vendor"] or "", "type": ptype,
                                "product_type": pptype, "variant_title": r["variant_title"]}, idx)
             w = c[0] if c else None
-        r["suggest"] = {k: v for k, v in (_sug(kind, w) if w else {}).items()
-                        if k in r["missing"]}
+        sug = {k: v for k, v in (_sug(kind, w) if w else {}).items() if k in r["missing"]}
+        if c:
+            fb = {"type": c["name"], "product_type": c["product_type"], "category": c["category"]}
+            sug = {**{k: v for k, v in fb.items() if k in r["missing"]}, **sug}
+        r["suggest"] = sug
         r["staged"] = staged.get(r["id"], {})
         r["review"] = r["id"] in revs
     return {"items": items, "total": total}

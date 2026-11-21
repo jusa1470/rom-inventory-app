@@ -648,7 +648,7 @@ _openManual(cat, used) {
                 <td class="num">${Fmt.price(v.price)}</td>
                 <td class="num">${Fmt.price(v.cost)}</td>
                 <td class="num">${Fmt.qty(v.inventory_quantity)}</td>
-                <td>${truncCell((vch[v.variant_id] || []).join(", "))}</td>
+                <td>${truncCell((vch[v.variant_id] || []).map((c) => c.name).join(", "))}</td>
                 <td>${v.weight != null ? esc(`${v.weight} ${v.weight_unit || ""}`) : "—"}</td>
                 <td>${esc(v.release_date || "—")}</td>
                 <td>${truncCell(listText(v.variant_tags))}</td>
@@ -690,7 +690,10 @@ _openManual(cat, used) {
     });
   }
 
-  _openEdit(p, prefill, onSaved) {
+  async _openEdit(p, prefill, onSaved) {
+    try { this._opts ||= await API.get("/api/products/new-options"); }
+    catch (e) { return Toast.error(e.message); }
+    const o = this._opts, cats = o.categories;
     const isNew = !p;
     p = p || {
       title: "",
@@ -715,6 +718,19 @@ _openManual(cat, used) {
           <label class="input-label">${label}</label>
           <input class="input" name="${name}" value="${esc(s)}" data-orig="${esc(s.trim())}">
         </div>`;
+    };
+    const sel = (name, label, val, arr) => `
+        <div class="input-group">
+          <label class="input-label">${label}</label>
+          <select class="input" name="${name}" data-orig="${esc(String(val ?? "").trim())}">
+            ${[...new Set(["", val || "", ...arr])]
+              .map((x) => `<option ${x === (val || "") ? "selected" : ""}>${esc(x)}</option>`).join("")}
+          </select>
+        </div>`;
+    const SEL = {
+      category: cats.map((c) => c.category.split(" > ").pop()),
+      product_type: o.product_type,
+      type: o.type,
     };
     const PF = [
       ["title", "Title", p.title],
@@ -754,7 +770,11 @@ _openManual(cat, used) {
     const vblock = (v) => `
       <div class="form-grid" data-vid="${esc(v.variant_id)}" data-iid="${esc(v.inventory_item_id)}" data-mid="${esc(v.media_id)}" data-barcode="${esc(v.barcode)}"
            style="margin-bottom:16px">
-        ${VF(v).map((f) => inp(...f)).join("")}
+        ${VF(v).map((f) => {
+          const h = inp(...f);
+          return ["edition", "color", "attributes"].includes(f[0])
+            ? h.replace('<div class="input-group">', '<div class="input-group" data-opt>') : h;
+        }).join("")}
         <details class="vch" style="grid-column:1/-1"><summary class="input" style="display:flex;align-items:center;cursor:pointer">Channels…</summary>
           <div class="vch-list" style="padding:8px 0"></div></details>
         ${v.variant_id ? `<button type="button" class="btn btn-danger btn-sm" data-delv="${esc(v.variant_id)}">Delete variant</button>` : ""}
@@ -762,7 +782,7 @@ _openManual(cat, used) {
     const body = document.createElement("div");
     body.innerHTML = `
       <div class="form-grid" id="edit-product">
-        ${PF.map((f) => inp(...f)).join("")}
+        ${PF.map((f) => (SEL[f[0]] ? sel(...f, SEL[f[0]]) : inp(...f))).join("")}
         <div class="input-group">
           <label class="input-label">Status</label>
           <select class="input" name="status" data-orig="${esc(p.status)}">
@@ -775,7 +795,7 @@ _openManual(cat, used) {
           </select>
         </div>
       </div>
-      <div class="section-label">Variants ${needNew && !isNew ? '<button type="button" class="btn btn-ghost btn-sm" id="autofill">Auto-fill from WebAMI</button>' : ""}
+      <div class="section-label" id="vhead">Variants ${needNew && !isNew ? '<button type="button" class="btn btn-ghost btn-sm" id="autofill">Auto-fill from WebAMI</button>' : ""}
         <button type="button" class="btn btn-ghost btn-sm" id="addv">Add variant</button></div>
       <div id="variants">${(needNew ? [{}] : p.variants).map(vblock).join("")}</div>`;
     body.addEventListener("click", async (e) => {
@@ -966,6 +986,34 @@ _openManual(cat, used) {
         updNote();
       }));
     
+    const applyOpts = () => {
+      const c = cats.find((x) => x.name === pf2("type").value);
+      const used = /\s-\s*u$/i.test(pf2("title").value.trim())
+        || pf2("tags").value.toLowerCase().split(",").some((t) => t.trim() === "used");
+      const show = !used && (!pf2("type").value || !!(c && c.media));
+      const gm = !pf2("type").value || !!(c && c.media);
+      const g = pf2("genres").closest(".input-group");
+      g.style.display = gm ? "" : "none";
+      body.querySelectorAll("[data-opt]").forEach((x) => { x.style.display = show ? "" : "none"; });
+      const af = body.querySelector("#autofill");
+      if (af) af.style.display = show ? "" : "none";
+      body.querySelector("#addv").style.display = show ? "" : "none";
+      body.querySelector("#vhead").firstChild.textContent = show ? "Variants " : "";
+    };
+    pf2("type").addEventListener("change", (e) => {
+      const c = cats.find((x) => x.name === e.target.value);
+      if (c) {
+        pf2("product_type").value = c.product_type;
+        pf2("category").value = c.category.split(" > ").pop();
+        pf2("product_type").dispatchEvent(new Event("input"));
+      }
+      applyOpts();
+    });
+    pf2("tags").addEventListener("input", applyOpts);
+    pf2("title").addEventListener("input", applyOpts);
+    body.querySelector("#addv").addEventListener("click", applyOpts);
+    applyOpts();
+
     if (prefill) {
       let row = prefill.variantId
         ? [...body.querySelectorAll("[data-vid]")].find((r) => r.dataset.vid === prefill.variantId)
@@ -997,7 +1045,7 @@ _openManual(cat, used) {
       ],
     });
 
-    if (afBtn) autofill();
+    if (afBtn) autofill().then(applyOpts);
   }
 
   async _openMatch(p, search = false) {

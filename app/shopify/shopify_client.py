@@ -230,10 +230,14 @@ class ShopifyClient:
             inp["category"] = f"gid://shopify/TaxonomyCategory/{f['category_id']}"
         clear = [a for a, _, _ in BULK_PRODUCT_MF if f.get(a) == ""]
         mfs = _mfs({k: v for k, v in f.items() if not (k in clear)}, BULK_PRODUCT_MF, cfg)
-        if mfs:
+        if mfs and "category" not in inp:
             inp["metafields"] = mfs
+            mfs = None
         if len(inp) > 1:
             _check(self.gql(M_PRODUCT_UPDATE, {"product": inp}), "productUpdate")
+        if mfs:
+            _check(self.gql(M_PRODUCT_UPDATE, {"product": {
+                "id": inp["id"], "metafields": mfs}}), "productUpdate")
         if clear:
             ids = [{"ownerId": f"gid://shopify/Product/{product_id}",
                     "namespace": cfg[ns], "key": cfg[key]}
@@ -384,7 +388,7 @@ class ShopifyClient:
                 return mid
             if st == "FAILED":
                 raise RuntimeError(f"Image upload failed: {url}")
-            time.sleep(1)
+            time.sleep(0.3)
         raise RuntimeError(f"Image upload timed out: {url}")
 
     def set_variant_image(self, product_id: str, variant_id: str, url: str) -> None:

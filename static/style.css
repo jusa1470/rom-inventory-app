@@ -327,3 +327,8 @@ select.input { cursor: pointer; }
 .list-box.sm { height: 260px; }
 .list-box.sm.expanded { height: 80vh; }
 .list-box thead th { position: sticky; top: 0; z-index: 2; background: var(--bg-raised); }
+
+.table-wrap > table.variants-table.fit { table-layout: fixed; width: 100%; min-width: 0; }
+.fit td { max-width: none; overflow: hidden; text-overflow: ellipsis; }
+.fit .pair { min-width: 0; }
+.fit .pair > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -63,26 +64,39 @@ def queue_remove(body: Items):
     return {"ok": True}
 
 
-def _apply(client, cfg, kind, id_, pid, f):
+def _do_product(client, cfg, cats, pid, f):
     f = {k: v.strip() for k, v in f.items() if (v or "").strip()}
-    if kind == "products":
-        if "genres" in f:
-            f["genres"] = [g.strip() for g in f["genres"].split(",") if g.strip()]
-        if "category" in f:
-            c = client.find_category(f.pop("category"))
-            f["category_id"], f["category_name"] = strip_gid(c["id"]), c["name"]
-        client.update_product(pid, f, cfg)
-        db.update_local(pid, f, [])
-        return
-    img = f.pop("image", None)
-    if "weight" in f:
-        f["weight"] = float(f["weight"])
-    if f:
-        v = {"id": id_, **f}
-        client.update_variants(pid, [v], cfg)
-        db.update_local(pid, {}, [v])
-    if img:
-        client.set_variant_image(pid, id_, img)
+    if "genres" in f:
+        f["genres"] = [g.strip() for g in f["genres"].split(",") if g.strip()]
+    if "category" in f:
+        name = f.pop("category")
+        if name not in cats:
+            cats[name] = client.find_category(name)
+        f["category_id"], f["category_name"] = strip_gid(cats[name]["id"]), cats[name]["name"]
+    client.update_product(pid, f, cfg)
+    return f
+
+
+def _do_variants(client, cfg, pid, items):
+    vs, imgs = [], []
+    for id_, f in items:
+        f = {k: v.strip() for k, v in f.items() if (v or "").strip()}
+        img = f.pop("image", None)
+        if "weight" in f:
+            f["weight"] = float(f["weight"])
+        if f:
+            vs.append({"id": id_, **f})
+        if img:
+            imgs.append((id_, img))
+    if vs:
+        client.update_variants(pid, vs, cfg)
+    errs = {}
+    for id_, img in imgs:
+        try:
+            client.set_variant_image(pid, id_, img)
+        except Exception as e:
+            errs[id_] = str(e)
+    return vs, errs
 
 
 @router.post("/queue/push")
@@ -91,21 +105,52 @@ def queue_push(body: Push = Push(), creds: dict = Depends(get_creds)):
         return {"ok": True, "dry_run": True, "pushed": 0, "errors": []}
     cfg = db.get_config()
     client = ShopifyClient(creds["shopify_store"], creds["shopify_token"])
-    groups: dict = {}
+    cats: dict = {}
+    prods, vby = [], {}
     for r in db.mq_list():
         if body.keys is not None and f"{r['kind']}|{r['id']}" not in body.keys:
             continue
-        groups.setdefault((r["kind"], r["id"], r["product_id"]), {})[r["field"]] = r["value"]
-    pushed, errors = 0, []
-    for (kind, id_, pid), f in groups.items():
+        if r["kind"] == "products":
+            prods.append(r)
+        else:
+            vby.setdefault(r["product_id"], {}).setdefault(r["id"], {})[r["field"]] = r["value"]
+    pg: dict = {}
+    for r in prods:
+        pg.setdefault(r["id"], {})[r["field"]] = r["value"]
+
+    def run(t):
         try:
-            _apply(client, cfg, kind, id_, pid, f)
+            if t[0] == "p":
+                return t, _do_product(client, cfg, cats, t[1], t[2]), None
+            return t, _do_variants(client, cfg, t[1], t[2]), None
         except Exception as e:
-            errors.append(f"{id_}: {e}")
+            return t, None, e
+
+    tasks = [("p", i, f) for i, f in pg.items()]
+    tasks += [("v", pid, list(d.items())) for pid, d in vby.items()]
+    pushed, errors = 0, []
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(run, tasks))
+    for t, res, err in results:
+        if err:
+            errors.append(f"{t[1]}: {err}")
             continue
-        db.mq_remove([{"kind": kind, "id": id_}])
-        db.mq_review(kind, [id_], False)
-        pushed += 1
+        if t[0] == "p":
+            db.update_local(t[1], res, [])
+            db.mq_remove([{"kind": "products", "id": t[1]}])
+            db.mq_review("products", [t[1]], False)
+            pushed += 1
+        else:
+            vs, errs = res
+            if vs:
+                db.update_local(t[1], {}, vs)
+            errors += [f"{i}: {e}" for i, e in errs.items()]
+            for id_, _ in t[2]:
+                if id_ in errs:
+                    continue
+                db.mq_remove([{"kind": "variants", "id": id_}])
+                db.mq_review("variants", [id_], False)
+                pushed += 1
     if pushed:
         sync_after_push(creds)
     return {"ok": not errors, "pushed": pushed, "errors": errors}

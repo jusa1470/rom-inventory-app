@@ -4,7 +4,8 @@ import { buildPager, debounce, esc, truncCell } from "../util.js";
 
 const FIELDS = {
   products: [["title", "Title"], ["vendor", "Vendor"], ["product_type", "Product type"],
-    ["type", "MF type"], ["genres", "MF genres"], ["category", "Category"]],
+    ["type", "MF type"], ["genres", "MF genres"], ["category", "Category"],
+    ["mismatch", "Mismatched"]],
   variants: [["title", "Title"], ["image", "Image"], ["price", "Price"], ["cost", "Cost"],
     ["weight", "Weight"], ["release_date", "Release date"], ["upc", "UPC"],
     ["description", "Description"]],
@@ -12,6 +13,24 @@ const FIELDS = {
 const lab = (kind, f) => (FIELDS[kind].find(x => x[0] === f) || [, f])[1];
 const k = (kind, id) => `${kind}|${id}`;
 const ref = key => { const [kind, id] = key.split("|"); return { kind, id }; };
+const BADGE = "width:110px;flex-shrink:0;height:auto;min-height:22px;white-space:normal;justify-content:center;text-align:center;line-height:1.2;padding:3px 8px";
+let OPT = { categories: [], type: [], product_type: [], genres: [] };
+const optsFor = (kind, f) => kind !== "products" ? null : ({
+  type: OPT.type, product_type: OPT.product_type, genres: OPT.genres,
+  category: OPT.categories.map(c => c.category) })[f] || null;
+const lbl = (f, x) => f === "category" ? String(x).split(" > ").pop() : x;
+const field = (kind, f, val, attrs, ph = "enter value") => {
+  const a = optsFor(kind, f);
+  let v = val ?? "";
+  if (a) {
+    v = a.find(x => lbl(f, x) === lbl(f, v)) || v;
+    const list = [...new Set([v, ...a])].filter(Boolean)
+      .sort((x, y) => lbl(f, x).localeCompare(lbl(f, y), undefined, { sensitivity: "base" }));
+    return `<select class="input" ${attrs} style="height:28px;min-width:0;flex:1">${["", ...list]
+      .map(x => `<option value="${esc(x)}" ${x === v ? "selected" : ""}>${esc(lbl(f, x))}</option>`).join("")}</select>`;
+  }
+  return `<input class="input" ${attrs} style="height:28px;min-width:0;flex:1" value="${esc(v)}" placeholder="${ph}" title="${esc(v)}">`;
+};
 
 export class MissingPage {
   constructor() {
@@ -22,6 +41,7 @@ export class MissingPage {
   destroy() {}
 
   async render(c) {
+    try { OPT = await API.get("/api/products/new-options"); } catch (_) {}
     this.c = c;
     c.innerHTML = `
       <div class="page">
@@ -43,7 +63,8 @@ export class MissingPage {
           <button class="btn btn-primary btn-sm" data-a="queue">Review queue (<span id="x-count">0</span>)</button>
         </div>
         <div id="x-pager-top"></div>
-        <div class="table-wrap"><table class="variants-table">
+        <div class="table-wrap"><table class="variants-table fit">
+          <colgroup><col style="width:3%"><col style="width:27%"><col style="width:15%"><col style="width:43%"><col style="width:12%"></colgroup>
           <thead><tr><th></th><th>Title</th><th>Vendor</th><th>Missing</th><th></th></tr></thead>
           <tbody id="x-body"></tbody></table></div>
         <div id="x-pager-bottom"></div>
@@ -66,6 +87,7 @@ export class MissingPage {
     body.addEventListener("change", e => {
       const d = e.target.dataset;
       if (d.s) e.target.checked ? this.sel.add(d.s) : this.sel.delete(d.s);
+      if (d.e) (this.edits[d.e] ||= {})[d.f] = e.target.value;
     });
     body.addEventListener("click", e => {
       const b = e.target.closest("button");
@@ -156,17 +178,18 @@ export class MissingPage {
         const key = k(r.kind, r.id);
         return `<tr>
           <td><input type="checkbox" data-s="${esc(key)}" ${this.sel.has(key) ? "checked" : ""}></td>
-          <td><div class="pair"><span>${esc(r.title)}</span><span class="sub">${esc(r.variant_title || "")}</span></div>
+          <td><div class="pair"><span title="${esc(r.title)}">${esc(r.title)}</span><span class="sub" title="${esc(r.variant_title || "")}">${esc(r.variant_title || "")}</span></div>
+            ${r.kind === "products" ? `<div class="muted" style="white-space:normal;line-height:1.4"><div>Category: ${esc(r.current.category || "—")}</div><div>Product type: ${esc(r.current.product_type || "—")}</div><div>Type: ${esc(r.current.type || "—")}</div></div>` : ""}
             ${r.review ? '<span class="badge badge-used">Review</span>' : ""}</td>
           <td>${truncCell(r.vendor)}</td>
           <td style="white-space:normal">${r.missing.map(f => `
             <div style="display:flex;gap:6px;align-items:center;margin:2px 0">
-              <span class="badge ${r.staged[f] != null ? "badge-new" : "badge-error"}" style="min-width:90px">${esc(lab(r.kind, f))}</span>
-              <input class="input" style="height:28px;min-width:220px" data-e="${esc(key)}" data-f="${f}"
-                value="${esc(this._v(r, f))}" placeholder="enter value" title="${f in r.suggest ? "suggested from WebAMI" : ""}">
+              <span class="badge ${r.staged[f] != null ? "badge-new" : "badge-error"}" style="${BADGE}">${esc(lab(r.kind, f))}</span>
+              ${field(r.kind, f, this._v(r, f), `data-e="${esc(key)}" data-f="${f}"`)}
+              ${r.current && r.current[f] ? `<span class="muted" style="flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.current[f])}">now: ${esc(r.current[f])}</span>` : ""}
             </div>`).join("")}</td>
-          <td style="white-space:nowrap;overflow:visible"><button class="btn btn-primary btn-sm" data-st="1" data-key="${esc(key)}">Stage</button>
-            <button class="btn btn-ghost btn-sm" data-rv="1" data-key="${esc(key)}">${r.review ? "Clear review" : "Needs review"}</button></td>
+          <td style="white-space:normal;overflow:visible"><div style="display:flex;flex-direction:column;gap:4px"><button class="btn btn-primary btn-sm" data-st="1" data-key="${esc(key)}">Stage</button>
+            <button class="btn btn-ghost btn-sm" data-rv="1" data-key="${esc(key)}">${r.review ? "Clear review" : "Needs review"}</button></div></td>
         </tr>`;
       }).join("") : '<tr><td colspan="5" class="empty-cell">Nothing missing</td></tr>';
       for (const id of ["#x-pager-top", "#x-pager-bottom"])
@@ -195,22 +218,23 @@ export class MissingPage {
           <button class="btn btn-ghost btn-sm" data-a="none">Deselect all</button>
           <button class="btn btn-ghost btn-sm" data-a="rmsel">Remove selected</button>
           <button class="btn btn-danger btn-sm" data-a="rmall">Remove all</button></div>
-        <div class="table-wrap"><table class="variants-table">
+        <div class="table-wrap"><table class="variants-table fit">
+          <colgroup><col style="width:3%"><col style="width:27%"><col style="width:58%"><col style="width:12%"></colgroup>
           <thead><tr><th></th><th>Item</th><th>Changes</th><th></th></tr></thead><tbody>
           ${lines.length ? lines.map(([key, fs]) => {
             const f0 = fs[0];
-            const left = FIELDS[f0.kind].filter(([n]) => !fs.some(x => x.field === n));
+            const left = FIELDS[f0.kind].filter(([n]) => n !== "mismatch" && !fs.some(x => x.field === n));
             return `<tr>
               <td><input type="checkbox" data-s="${esc(key)}" ${sel.has(key) ? "checked" : ""}></td>
-              <td><div class="pair"><span>${esc(f0.title)}</span><span class="sub">${esc(f0.variant_title || "")} · ${esc(f0.vendor || "")}</span></div></td>
+              <td><div class="pair"><span title="${esc(f0.title)}">${esc(f0.title)}</span><span class="sub" title="${esc((f0.variant_title || "") + " · " + (f0.vendor || ""))}">${esc(f0.variant_title || "")} · ${esc(f0.vendor || "")}</span></div></td>
               <td style="white-space:normal">${fs.map(x => `
                 <div style="display:flex;gap:6px;align-items:center;margin:2px 0">
-                  <span class="badge badge-active" style="min-width:90px">${esc(lab(x.kind, x.field))}</span>
-                  <input class="input" style="height:28px;min-width:240px" data-v="${esc(key)}" data-f="${x.field}" value="${esc(x.value)}">
+                  <span class="badge badge-active" style="${BADGE}">${esc(lab(x.kind, x.field))}</span>
+                  ${field(x.kind, x.field, x.value, `data-v="${esc(key)}" data-f="${x.field}"`)}
                   <button class="btn btn-ghost btn-sm" data-rf="${esc(key)}" data-f="${x.field}">✕</button></div>`).join("")}
                 ${left.length ? `<div style="display:flex;gap:6px;margin-top:6px" data-add="${esc(key)}">
                   <select class="input" style="height:28px;max-width:140px">${left.map(([n, l]) => `<option value="${n}">${l}</option>`).join("")}</select>
-                  <input class="input" style="height:28px" placeholder="value">
+                  <span class="addv" style="flex:1;display:flex;min-width:0">${field(f0.kind, left[0][0], "", "", "value")}</span>
                   <button class="btn btn-ghost btn-sm" data-a="add">Add</button></div>` : ""}</td>
               <td><button class="btn btn-ghost btn-sm" data-rl="${esc(key)}">Remove</button></td></tr>`;
           }).join("") : '<tr><td colspan="4" class="empty-cell">Queue is empty</td></tr>'}
@@ -219,6 +243,11 @@ export class MissingPage {
           <button class="btn btn-primary" data-a="push">Push selected (${sel.size})</button></div></div>`;
       const root = this.c.querySelector("#mq");
       root.addEventListener("change", async e => {
+        if (e.target.matches("[data-add] > select")) {
+          const w = e.target.parentElement;
+          w.querySelector(".addv").innerHTML = field(ref(w.dataset.add).kind, e.target.value, "", "", "value");
+          return;
+        }
         const d = e.target.dataset;
         if (d.s) { e.target.checked ? sel.add(d.s) : sel.delete(d.s); return draw(); }
         if (d.v) {
@@ -244,7 +273,7 @@ export class MissingPage {
         if (d.rf) { await post("queue/remove", { items: [{ ...ref(d.rf), field: d.f }] }); return load(); }
         if (d.a === "add") {
           const w = b.closest("[data-add]");
-          const value = w.querySelector("input").value.trim();
+          const value = w.querySelector(".addv").firstElementChild.value.trim();
           if (!value) return Toast.error("Enter a value");
           await post("stage", { items: [{ ...ref(w.dataset.add), field: w.querySelector("select").value, value }] });
           return load();
@@ -252,6 +281,7 @@ export class MissingPage {
         if (d.a === "push") {
           if (!sel.size) return Toast.info("Nothing selected");
           b.disabled = true;
+          b.innerHTML = `<span class="spinner"></span>Pushing ${sel.size}…`;
           try {
             const r = await API.post("/api/missing/queue/push", { keys: [...sel] });
             if (r.dry_run) Toast.warning("Test mode: nothing written");
